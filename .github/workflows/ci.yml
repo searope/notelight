@@ -28,6 +28,21 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test -p notelight-core
+      - name: Docs build without warnings
+        run: cargo doc -p notelight-core --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: Benchmarks compile
+        run: cargo bench -p notelight-core --no-run
+
+  rust-windows:
+    name: Rust tests on Windows (mmap + generation swap)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p notelight-core
 
   python:
     name: Python ${{ matrix.python }} on ${{ matrix.os }}

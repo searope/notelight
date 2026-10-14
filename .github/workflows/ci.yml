@@ -21,7 +21,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      # Lints are pinned to a known toolchain so a new stable release cannot
+      # break CI overnight; bump deliberately and fix any new lints in one PR.
+      - uses: dtolnay/rust-toolchain@1.97.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2

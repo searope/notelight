@@ -1,0 +1,16 @@
+[package]
+name = "notelight-core"
+description = "Retrieval engine for notelight: chunking, BM25, quantized vector search, index format."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Deliberately free of Python, ML and async dependencies so the same crate
+# compiles to native code (via PyO3) and to WebAssembly (v2).
+[dependencies]
+
+[lints]
+workspace = true

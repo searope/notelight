@@ -1,0 +1,59 @@
+[build-system]
+requires = ["maturin>=1.8,<2"]
+build-backend = "maturin"
+
+[project]
+name = "notelight"
+description = "Private semantic search over your own files, for you and your AI agents."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
+authors = [{ name = "Sergey Nefedyev" }]
+keywords = ["search", "semantic-search", "rag", "mcp", "embeddings", "bm25"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Rust",
+  "Operating System :: OS Independent",
+  "Topic :: Text Processing :: Indexing",
+]
+dynamic = ["version"]
+dependencies = [
+  "numpy>=1.26",
+  "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = ["maturin>=1.8,<2", "pytest>=8", "ruff>=0.6", "mypy>=1.11"]
+
+[project.scripts]
+notelight = "notelight.cli:app"
+
+[project.urls]
+Repository = "https://github.com/searope/notelight"
+
+[tool.maturin]
+manifest-path = "crates/notelight-py/Cargo.toml"
+python-source = "python"
+module-name = "notelight._core"
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+packages = ["notelight"]
+mypy_path = "python"
+
+[tool.ruff.lint.isort]
+known-first-party = ["notelight"]

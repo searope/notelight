@@ -9,6 +9,7 @@ from __future__ import annotations
 from notelight._core import IndexFormatError, NotelightError, SchemaError
 
 __all__ = [
+    "DatasetNotAvailableError",
     "EmbedderMismatchError",
     "IndexBusyError",
     "IndexFormatError",
@@ -33,3 +34,7 @@ class EmbedderMismatchError(NotelightError):
 
 class ModelNotAvailableError(NotelightError):
     """The embedding model is not in the cache and downloading is not allowed."""
+
+
+class DatasetNotAvailableError(NotelightError):
+    """An evaluation dataset could not be downloaded, verified or read."""

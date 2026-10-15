@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use notelight_core::index::{self, ChunkRecord, OpenOptions, SearchOpts, WriterOptions};
+use notelight_core::vectors::VectorMode;
 
 use crate::errors::to_py;
 
@@ -284,17 +285,20 @@ impl PyIndexReader {
         py.detach(|| self.inner.search_bm25(text, k))
     }
 
-    /// Vector search only: the `k` best `(id, cosine)` pairs.
-    #[pyo3(signature = (vector, k, candidates = 200))]
+    /// Vector search only: the `k` best `(id, cosine)` pairs. `mode` is one of
+    /// `VECTOR_MODES`; the default is what hybrid search uses.
+    #[pyo3(signature = (vector, k, candidates = 200, mode = "binary+int8"))]
     fn search_vector(
         &self,
         py: Python<'_>,
         vector: PyReadonlyArray1<'_, f32>,
         k: usize,
         candidates: usize,
+        mode: &str,
     ) -> PyResult<Vec<(u32, f32)>> {
+        let mode: VectorMode = mode.parse().map_err(to_py)?;
         let vector = vector.as_slice()?;
-        py.detach(|| self.inner.search_vector(vector, k, candidates))
+        py.detach(|| self.inner.search_vector_with(vector, k, candidates, mode))
             .map_err(to_py)
     }
 

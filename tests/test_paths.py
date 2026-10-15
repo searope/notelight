@@ -16,6 +16,7 @@ def test_home_holds_indexes_and_models(
     assert paths.data_dir() == notelight_home
     assert paths.indexes_dir() == notelight_home / "indexes"
     assert paths.model_cache_dir() == notelight_home / "models"
+    assert paths.eval_cache_dir() == notelight_home / "eval"
 
 
 def test_model_cache_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

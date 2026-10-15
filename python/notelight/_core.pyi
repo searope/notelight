@@ -2,13 +2,17 @@
 
 from os import PathLike
 from pathlib import Path
-from typing import Any, final
+from typing import Any, Literal, final
 
 import numpy as np
 import numpy.typing as npt
 
 __version__: str
 SCHEMA_VERSION: int
+#: Names accepted by `IndexReader.search_vector(mode=...)`, in report order.
+VECTOR_MODES: list[str]
+
+VectorMode = Literal["int8", "binary", "binary+int8", "ternary+int8"]
 
 def quantize_binary(vectors: npt.NDArray[np.float32]) -> npt.NDArray[np.uint8]:
     """Quantize float32 vectors of shape (n, dim) to packed bits, shape (n, ceil(dim / 8))."""
@@ -140,9 +144,20 @@ class IndexReader:
         """Keyword search only: (id, bm25_score) pairs."""
 
     def search_vector(
-        self, vector: npt.NDArray[np.float32], k: int, candidates: int = 200
+        self,
+        vector: npt.NDArray[np.float32],
+        k: int,
+        candidates: int = 200,
+        mode: VectorMode = "binary+int8",
     ) -> list[tuple[int, float]]:
-        """Vector search only: (id, cosine) pairs."""
+        """Vector search only: (id, cosine) pairs.
+
+        mode: "binary+int8" (default, as in hybrid search), "ternary+int8"
+        (ternary candidates, experimental), "binary" (Hamming distance alone;
+        scores are 1 - 2 * distance / dim) or "int8" (every vector, no
+        candidate stage). The first "ternary+int8" call derives ternary masks
+        from the int8 codes. Raises ValueError on an unknown mode.
+        """
 
     def chunk(self, id: int) -> ChunkRecord:
         """The stored chunk with this id."""

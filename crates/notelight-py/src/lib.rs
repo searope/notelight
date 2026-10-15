@@ -19,6 +19,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use notelight_core::quant;
+use notelight_core::vectors::VectorMode;
 
 /// Quantize a batch of float32 vectors, shape `(n, dim)`, to packed binary
 /// codes of shape `(n, ceil(dim / 8))`.
@@ -68,6 +69,8 @@ fn hamming(a: PyReadonlyArray1<'_, u8>, b: PyReadonlyArray1<'_, u8>) -> PyResult
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", notelight_core::VERSION)?;
     m.add("SCHEMA_VERSION", notelight_core::index::SCHEMA_VERSION)?;
+    let modes: Vec<&str> = VectorMode::ALL.iter().map(|m| m.name()).collect();
+    m.add("VECTOR_MODES", modes)?;
     m.add_function(wrap_pyfunction!(quantize_binary, m)?)?;
     m.add_function(wrap_pyfunction!(hamming, m)?)?;
     m.add_function(wrap_pyfunction!(chunking::chunk_text, m)?)?;

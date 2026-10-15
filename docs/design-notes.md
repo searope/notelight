@@ -193,3 +193,68 @@ The pipeline depends on an `Embedder` protocol, not on ONNX. Tests use
 `HashingEmbedder`, a deterministic feature-hashing bag of words, which
 needs no download, network or randomness. A test for the real model runs when
 `NOTELIGHT_MODEL_TESTS=1` is set.
+
+## Milestone 3 decisions
+
+### What is measured, and against what
+
+`notelight eval` scores seven methods on BEIR SciFact, NFCorpus and FiQA
+with recall@10 and nDCG@10, using the same bge-small embedder and the same
+index code as `notelight search`:
+
+| Method | What it is |
+|---|---|
+| `f32` | exact cosine similarity over float32 vectors, in NumPy: the ceiling for the quantized methods |
+| `int8` | int8 scores for every vector (Rust) |
+| `binary` | Hamming distance alone (Rust) |
+| `binary+int8` | 200 binary candidates re-scored with int8: the default |
+| `ternary+int8` | 200 ternary candidates re-scored with int8: experimental |
+| `bm25` | keyword search alone |
+| `hybrid` | BM25 and `binary+int8` fused with RRF: what `notelight search` returns |
+
+Each BEIR document is indexed as one chunk, with its title as the heading
+path, so the index, the BM25 text and the embedded text are built exactly as
+for a note. Metrics follow the BEIR reference (`pytrec_eval`): linear gain
+for nDCG, judged documents missing from the corpus still count as relevant,
+and queries without a positive judgment are skipped.
+
+### Ternary codes live in the core, but not on disk
+
+A ternary code is the stored binary code (the sign) plus a mask of
+"significant" dimensions, those above 0.7 × the vector's mean absolute value.
+The mask is derived from the stored int8 codes the first time a reader runs a
+ternary search, and cached in a `OnceLock` for the reader's lifetime. That
+keeps it in Rust next to the binary stage (the browser build will want the
+same loop) without changing the index format or bumping `SCHEMA_VERSION`.
+Whether it should become the default is a question for the numbers; see
+[results.md](results.md).
+
+### Datasets are pinned like the model
+
+The three zips are downloaded once from the BEIR authors' server, checked
+against a pinned SHA-256 before they are unpacked, and unpacked under a
+temporary name that is renamed into place, so a folder in the cache is
+always complete. Members that would unpack outside the cache are refused.
+`--offline` works once the cache is filled. Any folder in the BEIR layout can
+be evaluated by passing its path, which is how the tests run without a
+network.
+
+### Embeddings are cached per dataset and embedder
+
+Embedding FiQA's 57,638 documents takes several minutes on a laptop CPU, and
+searching takes seconds, so corpus and query vectors are saved as `.npy`
+files next to an index built from them, under
+`<cache>/eval/runs/<dataset>-<content hash>/<embedder>/`. A second run only
+searches. The cache key includes a hash of the dataset files and the
+embedder id, so a changed dataset or model can never reuse stale vectors.
+
+### A NumPy baseline, implemented the way a NumPy user would
+
+`NumpyVectors` re-implements `int8`, `binary` and `binary+int8` in NumPy with
+the same codes and tie-breaking, and the harness reports latency and top-10
+agreement for each pair. It answers two questions: is the Rust correct
+end to end (agreement), and is it worth having (latency)? Two differences are
+deliberate. NumPy has no int8 × float32 matrix-vector kernel, so its int8
+codes are kept dequantized as float32 (four times the memory). And NumPy's
+matrix product may use several threads, while the Rust search is one thread
+per query.

@@ -12,6 +12,12 @@
 //! All vectors are L2-normalized on insert and queries on search, so scores
 //! approximate cosine similarity.
 //!
+//! [`VectorMode`] selects other strategies, which the evaluation harness
+//! compares: int8 over every vector, binary codes alone, or ternary codes
+//! instead of binary ones for the candidate stage. Ternary masks are not
+//! stored; they are derived from the int8 codes on first use (see
+//! [`crate::quant::ternary_mask`]).
+//!
 //! File layout (little-endian, header described in `docs/index-format.md`):
 //!
 //! ```text
@@ -21,13 +27,80 @@
 //! int8     [i8; n * dim]
 //! ```
 
+use std::fmt;
+use std::str::FromStr;
+use std::sync::OnceLock;
+
 use crate::bin_format::{self, HEADER_LEN, f32_at, to_u32};
 use crate::error::{Error, Result};
-use crate::quant::{binary_code_len, hamming, l2_normalized, quantize_binary, quantize_int8};
+use crate::quant::{
+    binary_code_len, hamming, l2_normalized, quantize_binary, quantize_int8, ternary_dot,
+    ternary_mask,
+};
 use crate::topk::{smallest_k_by_histogram, top_k};
 
 const MAGIC: [u8; 4] = *b"NLVC";
 const VERSION: u16 = 1;
+
+/// How [`Vectors::search_with`] finds and scores results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VectorMode {
+    /// Binary candidates re-scored with int8 codes. The default, and what
+    /// hybrid search uses.
+    #[default]
+    BinaryInt8,
+    /// Ternary candidates re-scored with int8 codes. Experimental.
+    TernaryInt8,
+    /// Rank by Hamming distance alone. Scores are `1 - 2 * distance / dim`,
+    /// the fraction of agreeing signs mapped to `-1..=1`.
+    Binary,
+    /// Int8 scores for every vector, no candidate stage.
+    Int8,
+}
+
+impl VectorMode {
+    /// Every mode, in the order the evaluation reports them.
+    pub const ALL: [Self; 4] = [
+        Self::Int8,
+        Self::Binary,
+        Self::BinaryInt8,
+        Self::TernaryInt8,
+    ];
+
+    /// The mode's name, as accepted by [`str::parse`].
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::BinaryInt8 => "binary+int8",
+            Self::TernaryInt8 => "ternary+int8",
+            Self::Binary => "binary",
+            Self::Int8 => "int8",
+        }
+    }
+}
+
+impl fmt::Display for VectorMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl FromStr for VectorMode {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|m| m.name() == s)
+            .ok_or_else(|| {
+                let names: Vec<&str> = Self::ALL.iter().map(|m| m.name()).collect();
+                Error::Invalid(format!(
+                    "unknown vector mode {s:?}; expected one of {}",
+                    names.join(", ")
+                ))
+            })
+    }
+}
 
 /// Accumulates vectors and serializes them.
 #[derive(Debug)]
@@ -122,6 +195,9 @@ pub struct Vectors<B> {
     code_len: usize,
     scales_at: usize,
     int8_at: usize,
+    /// Ternary masks for every vector, `n * code_len` bytes, built on first
+    /// use by [`VectorMode::TernaryInt8`].
+    ternary_masks: OnceLock<Vec<u8>>,
 }
 
 impl<B: AsRef<[u8]>> Vectors<B> {
@@ -154,6 +230,7 @@ impl<B: AsRef<[u8]>> Vectors<B> {
             code_len,
             scales_at,
             int8_at,
+            ternary_masks: OnceLock::new(),
         })
     }
 
@@ -180,11 +257,16 @@ impl<B: AsRef<[u8]>> Vectors<B> {
         &self.bytes.as_ref()[start..start + self.code_len]
     }
 
+    /// Raw int8 codes of vector `i`, as bytes.
+    fn int8_codes(&self, i: usize) -> &[u8] {
+        let start = self.int8_at + i * self.dim;
+        &self.bytes.as_ref()[start..start + self.dim]
+    }
+
     /// `query · v_i` using int8 codes and the stored scale.
     fn int8_dot(&self, query: &[f32], i: usize) -> f32 {
         let data = self.bytes.as_ref();
-        let start = self.int8_at + i * self.dim;
-        let codes = &data[start..start + self.dim];
+        let codes = self.int8_codes(i);
         // Codes are stored as raw bytes; `i8::from_le_bytes` reinterprets each
         // one without `unsafe`, and compiles to the same sign-extending load.
         let dot: f32 = query
@@ -233,6 +315,51 @@ impl<B: AsRef<[u8]>> Vectors<B> {
             .collect()
     }
 
+    /// Ternary masks of every stored vector, derived from the int8 codes the
+    /// first time they are needed and kept for the reader's lifetime.
+    ///
+    /// `OnceLock` makes this safe to call from several threads at once: one
+    /// of them builds the masks and the others wait for it.
+    fn ternary_masks(&self) -> &[u8] {
+        self.ternary_masks.get_or_init(|| {
+            let mut masks = Vec::with_capacity(self.n * self.code_len);
+            let mut scratch = vec![0.0_f32; self.dim];
+            for i in 0..self.n {
+                for (x, &c) in scratch.iter_mut().zip(self.int8_codes(i)) {
+                    *x = f32::from(i8::from_le_bytes([c]));
+                }
+                masks.extend(ternary_mask(&scratch));
+            }
+            masks
+        })
+    }
+
+    /// Ternary "distances" from `query` to every stored vector: `dim` minus
+    /// the ternary dot product, so `0` is the best match and every value fits
+    /// the histogram selection used for Hamming distances.
+    fn ternary_scan(&self, query: &[f32], dim: i64) -> Vec<u16> {
+        let (q_sign, q_mask) = (quantize_binary(query), ternary_mask(query));
+        let masks = self.ternary_masks();
+        (0..self.n)
+            .map(|i| {
+                let mask = &masks[i * self.code_len..(i + 1) * self.code_len];
+                let dot = ternary_dot(&q_sign, &q_mask, self.code(i), mask);
+                // dot is in -dim..=dim, so this is in 0..=2 * dim.
+                u16::try_from(dim - dot).unwrap_or(u16::MAX)
+            })
+            .collect()
+    }
+
+    /// Re-score `cands` with int8 codes and keep the best `k`.
+    fn rescore(&self, query: &[f32], cands: Vec<u32>, k: usize) -> Vec<(u32, f32)> {
+        top_k(
+            cands
+                .into_iter()
+                .map(|i| (i, self.int8_dot(query, i as usize))),
+            k,
+        )
+    }
+
     /// Two-stage search: binary candidates, then int8 rescoring.
     ///
     /// Returns up to `k` `(id, score)` pairs, best first. `candidates` is
@@ -241,16 +368,58 @@ impl<B: AsRef<[u8]>> Vectors<B> {
     /// # Errors
     /// Fails if `query` has the wrong dimension.
     pub fn search(&self, query: &[f32], k: usize, candidates: usize) -> Result<Vec<(u32, f32)>> {
+        self.search_with(query, k, candidates, VectorMode::BinaryInt8)
+    }
+
+    /// Search with an explicit [`VectorMode`].
+    ///
+    /// Returns up to `k` `(id, score)` pairs, best first, ties broken by lower
+    /// id. `candidates` applies to the two-stage modes and is raised to at
+    /// least `k`; the other modes ignore it. The first ternary search builds
+    /// the ternary masks (one pass over the int8 codes).
+    ///
+    /// # Errors
+    /// Fails if `query` has the wrong dimension, is all zeros or contains
+    /// non-finite values, or if a ternary search is asked of vectors with
+    /// more than 32 767 dimensions.
+    pub fn search_with(
+        &self,
+        query: &[f32],
+        k: usize,
+        candidates: usize,
+        mode: VectorMode,
+    ) -> Result<Vec<(u32, f32)>> {
         self.check_query(query)?;
         let query = l2_normalized(query);
-        let dists = self.hamming_scan(&query);
-        let cands = smallest_k_by_histogram(&dists, candidates.max(k));
-        Ok(top_k(
-            cands
-                .into_iter()
-                .map(|i| (i, self.int8_dot(&query, i as usize))),
-            k,
-        ))
+        let candidates = candidates.max(k);
+        Ok(match mode {
+            VectorMode::BinaryInt8 => {
+                let cands = smallest_k_by_histogram(&self.hamming_scan(&query), candidates);
+                self.rescore(&query, cands, k)
+            }
+            VectorMode::TernaryInt8 => {
+                // Distances go up to 2 * dim and must fit the u16 histogram.
+                let dim = i16::try_from(self.dim).map_err(|_| {
+                    Error::Invalid(format!(
+                        "ternary search supports at most {} dimensions, not {}",
+                        i16::MAX,
+                        self.dim
+                    ))
+                })?;
+                let dists = self.ternary_scan(&query, i64::from(dim));
+                let cands = smallest_k_by_histogram(&dists, candidates);
+                self.rescore(&query, cands, k)
+            }
+            VectorMode::Binary => {
+                let dim = self.dim as f32;
+                let dists = self.hamming_scan(&query);
+                smallest_k_by_histogram(&dists, k)
+                    .into_iter()
+                    .map(|i| (i, 1.0 - 2.0 * f32::from(dists[i as usize]) / dim))
+                    .collect()
+            }
+            VectorMode::Int8 => top_k((0..self.n).map(|i| (i as u32, self.int8_dot(&query, i))), k),
+        })
     }
 
     /// Exact int8 search over every vector, skipping the binary stage.
@@ -259,12 +428,7 @@ impl<B: AsRef<[u8]>> Vectors<B> {
     /// # Errors
     /// Fails if `query` has the wrong dimension.
     pub fn search_int8_exhaustive(&self, query: &[f32], k: usize) -> Result<Vec<(u32, f32)>> {
-        self.check_query(query)?;
-        let query = l2_normalized(query);
-        Ok(top_k(
-            (0..self.n).map(|i| (i as u32, self.int8_dot(&query, i))),
-            k,
-        ))
+        self.search_with(query, k, 0, VectorMode::Int8)
     }
 }
 
@@ -334,6 +498,53 @@ mod tests {
             let approx = idx.score(q, i as u32).unwrap();
             assert!((exact - approx).abs() < 0.02, "{exact} vs {approx}");
         }
+    }
+
+    #[test]
+    fn every_mode_finds_itself_first() {
+        let vs = vecs(200, 64, 4);
+        let idx = build(&vs);
+        for mode in VectorMode::ALL {
+            for (i, v) in vs.iter().enumerate().step_by(23) {
+                let hits = idx.search_with(v, 5, 20, mode).unwrap();
+                assert_eq!(hits.len(), 5, "{mode}");
+                assert_eq!(hits[0].0 as usize, i, "{mode}");
+                assert!(hits.windows(2).all(|w| w[0].1 >= w[1].1), "{mode}");
+            }
+        }
+    }
+
+    #[test]
+    fn ternary_with_all_candidates_equals_exhaustive() {
+        let vs = vecs(120, 40, 5);
+        let idx = build(&vs);
+        let q = &vecs(1, 40, 77)[0];
+        assert_eq!(
+            idx.search_with(q, 7, 120, VectorMode::TernaryInt8).unwrap(),
+            idx.search_with(q, 7, 0, VectorMode::Int8).unwrap()
+        );
+    }
+
+    #[test]
+    fn binary_mode_scores_are_sign_agreement() {
+        let mut b = VectorBuilder::new(4);
+        b.add(&[1.0, 1.0, 1.0, 1.0]).unwrap();
+        b.add(&[1.0, 1.0, -1.0, -1.0]).unwrap();
+        b.add(&[-1.0, -1.0, -1.0, -1.0]).unwrap();
+        let idx = Vectors::from_bytes(b.finish().unwrap()).unwrap();
+        let hits = idx
+            .search_with(&[1.0, 1.0, 1.0, 1.0], 3, 0, VectorMode::Binary)
+            .unwrap();
+        assert_eq!(hits, vec![(0, 1.0), (1, 0.0), (2, -1.0)]);
+    }
+
+    #[test]
+    fn modes_round_trip_through_their_names() {
+        for mode in VectorMode::ALL {
+            assert_eq!(mode.to_string().parse::<VectorMode>().unwrap(), mode);
+        }
+        assert_eq!(VectorMode::default(), VectorMode::BinaryInt8);
+        assert!("hnsw".parse::<VectorMode>().is_err());
     }
 
     #[test]

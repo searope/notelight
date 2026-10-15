@@ -135,6 +135,11 @@ Vectors are L2-normalized before quantization. Bit `j` of vector `i` is bit
 `j % 8` of byte `i * ceil(dim/8) + j / 8`, which matches
 `numpy.packbits(v > 0, bitorder="little")`.
 
+Ternary codes (the experimental `ternary+int8` search mode) are not stored.
+Their sign plane is the binary code above, and their mask plane is derived
+from the int8 codes when a reader first needs it, so they add nothing to this
+layout and need no schema change.
+
 ## Versioning rules
 
 - Changing the layout of any file, or the meaning of a field, bumps

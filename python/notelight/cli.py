@@ -1,4 +1,4 @@
-"""Command-line interface: `notelight index | search | status | version`."""
+"""Command-line interface: `notelight index | search | status | eval | version`."""
 
 from __future__ import annotations
 
@@ -207,6 +207,92 @@ def status(
         return
     for i in infos:
         _print_info(i)
+
+
+@app.command("eval")
+def eval_(
+    datasets: Annotated[
+        list[str] | None,
+        typer.Argument(
+            help="BEIR dataset names (scifact, nfcorpus, fiqa) or folders in the BEIR layout. "
+            "Default: all three.",
+            show_default=False,
+        ),
+    ] = None,
+    embedder: EmbedderOpt = None,
+    methods: Annotated[
+        str | None,
+        typer.Option(
+            "--methods",
+            "-m",
+            help="Comma-separated methods to run. Default: all.",
+            show_default=False,
+        ),
+    ] = None,
+    k: Annotated[int, typer.Option("--k", "-k", min=1, help="Cut-off for recall and nDCG.")] = 10,
+    candidates: Annotated[
+        int, typer.Option(min=1, help="Binary/ternary candidates re-scored with int8.")
+    ] = 200,
+    max_queries: Annotated[
+        int | None,
+        typer.Option(min=1, help="Evaluate only the first N queries.", show_default=False),
+    ] = None,
+    baseline: Annotated[
+        bool, typer.Option("--baseline/--no-baseline", help="Also run the NumPy baseline.")
+    ] = True,
+    as_json: Annotated[bool, typer.Option("--json", help="Print results as JSON.")] = False,
+    offline: OfflineOpt = False,
+) -> None:
+    """Measure recall@k and nDCG@k of every retrieval method on BEIR datasets.
+
+    Datasets and the model are downloaded once; corpus embeddings are cached.
+    """
+    from notelight.eval import BEIR_DATASETS, METHODS, evaluate, format_markdown, load_dataset
+    from notelight.eval.datasets import DatasetSpec
+
+    name = embedder or "bge-small"
+    if name == "none":
+        _fail("eval needs an embedder; choose bge-small or hashing", code=2)
+    emb = _embedder(name, offline)
+    assert emb is not None
+    chosen = [m.strip() for m in methods.split(",")] if methods else list(METHODS)
+    unknown = [m for m in chosen if m not in METHODS]
+    if unknown:
+        _fail(f"unknown method(s) {', '.join(unknown)}; choose from {', '.join(METHODS)}", code=2)
+
+    def on_dataset_download(spec: DatasetSpec) -> None:
+        typer.echo(f"Downloading {spec.name} ({spec.size / 1e6:.1f} MB, one time)...", err=True)
+
+    def progress(stage: str, done: int, total: int) -> None:
+        if stage == "embed-docs" and (done == total or done % 2048 < 256):
+            typer.echo(f"  embedded {done:,}/{total:,} documents", err=True)
+
+    results = []
+    for target in datasets or list(BEIR_DATASETS):
+        try:
+            data = load_dataset(target, offline=offline, on_download=on_dataset_download)
+            typer.echo(
+                f"{data.name}: {len(data.doc_ids):,} documents, {len(data.queries)} queries",
+                err=True,
+            )
+            results.append(
+                evaluate(
+                    data,
+                    emb,
+                    methods=chosen,
+                    k=k,
+                    candidates=candidates,
+                    max_queries=max_queries,
+                    baseline=baseline,
+                    progress=progress,
+                )
+            )
+        except NotelightError as e:
+            _fail(str(e))
+    if as_json:
+        typer.echo(json.dumps([r.to_dict() for r in results], indent=2))
+    else:
+        typer.echo(format_markdown(results))
 
 
 @app.command()

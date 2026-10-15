@@ -12,10 +12,7 @@ SHA-256 when downloaded, so the vectors in an index never silently change.
 from __future__ import annotations
 
 import hashlib
-import os
 import re
-import tempfile
-import urllib.request
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +22,7 @@ import numpy as np
 import numpy.typing as npt
 
 from notelight import paths
+from notelight.download import download_verified
 from notelight.errors import ModelNotAvailableError
 
 __all__ = [
@@ -179,36 +177,6 @@ def _local_path(spec: ModelSpec, file: ModelFile, cache_dir: Path) -> Path:
     return cache_dir / spec.repo.replace("/", "--") / spec.revision / file.path
 
 
-def _sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for block in iter(lambda: f.read(1 << 20), b""):
-            h.update(block)
-    return h.hexdigest()
-
-
-def _download(url: str, dest: Path, expected: ModelFile) -> None:
-    """Stream `url` to a temporary file next to `dest`, verify, then rename."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    h = hashlib.sha256()
-    fd, tmp_name = tempfile.mkstemp(dir=dest.parent, prefix=".download-")
-    tmp = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "wb") as out, urllib.request.urlopen(url, timeout=60) as resp:
-            for block in iter(lambda: resp.read(1 << 20), b""):
-                h.update(block)
-                out.write(block)
-        digest = h.hexdigest()
-        if digest != expected.sha256:
-            raise ModelNotAvailableError(
-                f"{expected.path}: SHA-256 mismatch (expected {expected.sha256}, got {digest}); "
-                "the download was corrupted or the file changed upstream"
-            )
-        os.replace(tmp, dest)
-    finally:
-        tmp.unlink(missing_ok=True)
-
-
 def ensure_model_files(
     spec: ModelSpec,
     *,
@@ -237,7 +205,7 @@ def ensure_model_files(
                 )
             if on_download is not None:
                 on_download(file)
-            _download(spec.url(file), dest, file)
+            download_verified(spec.url(file), dest, file.sha256, error=ModelNotAvailableError)
         local.append(dest)
     return local[0], local[1]
 

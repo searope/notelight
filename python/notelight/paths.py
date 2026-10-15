@@ -1,7 +1,7 @@
 """Where notelight keeps indexes and downloaded models.
 
-By default indexes live in the user data directory and models in the user
-cache directory (via `platformdirs`). Setting `NOTELIGHT_HOME` puts both under
+By default indexes live in the user data directory, and models and evaluation
+datasets in the user cache directory (via `platformdirs`). Setting `NOTELIGHT_HOME` puts both under
 one folder instead, which is what the tests do. `NOTELIGHT_MODEL_CACHE`, if
 set, overrides the model directory alone (for example, a shared or
 pre-populated cache on an offline machine).
@@ -46,6 +46,14 @@ def model_cache_dir() -> Path:
     if home:
         return Path(home) / "models"
     return platformdirs.user_cache_path(APP_NAME, appauthor=False) / "models"
+
+
+def eval_cache_dir() -> Path:
+    """Directory for evaluation datasets, their embeddings and indexes."""
+    home = os.environ.get(HOME_ENV)
+    if home:
+        return Path(home) / "eval"
+    return platformdirs.user_cache_path(APP_NAME, appauthor=False) / "eval"
 
 
 def indexes_dir() -> Path:

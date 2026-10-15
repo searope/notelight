@@ -9,9 +9,10 @@
 A Rust retrieval engine with a Python interface, a CLI, and an MCP server, with
 retrieval quality you can measure.
 
-> **Status: milestone 2 of 5.** You can index a folder of notes and search it
-> from the command line. Retrieval-quality numbers (milestone 3) and the MCP
-> server for AI agents (milestone 4) are next. See the [roadmap](#roadmap).
+> **Status: milestone 3 of 5.** You can index a folder of notes, search it
+> from the command line, and measure retrieval quality on public benchmarks
+> ([results](#retrieval-quality)). The MCP server for AI agents (milestone 4)
+> is next. See the [roadmap](#roadmap).
 
 ## Why
 
@@ -60,6 +61,7 @@ re-run takes about as long as starting the CLI (0.5 s for the folder above).
 | `notelight index <folder>` | create or update the index for a folder |
 | `notelight search "<query>" [-k 10] [--json] [-f <folder>]` | hybrid search; `--json` returns path, line range, heading path and text for scripts and agents |
 | `notelight status [<folder>] [--json]` | list indexed folders, sizes, embedders and generations |
+| `notelight eval [<dataset or folder>...] [--json]` | recall@10 and nDCG@10 of every retrieval method on BEIR datasets ([below](#retrieval-quality)) |
 | `notelight version` | versions and the data directory |
 
 Options:
@@ -121,7 +123,36 @@ single core of a cloud VM. These are indicative numbers, not a tuned benchmark:
 
 The two-stage search is about 33× faster than scanning every int8 vector,
 because the binary pass compares 48 bytes per vector with `popcount`, and only
-200 candidates are re-scored. Retrieval quality is measured in milestone 3.
+200 candidates are re-scored.
+
+## Retrieval quality
+
+nDCG@10 on three [BEIR](https://github.com/beir-cellar/beir) test sets with
+the default bge-small embedder, measured with `notelight eval` (one command,
+datasets pinned by SHA-256; see [docs/results.md](docs/results.md) for
+recall@10, latency and the setup):
+
+| Method | SciFact | NFCorpus | FiQA |
+|---|---:|---:|---:|
+| Exact float32 search (reference) | 0.713 | 0.344 | 0.403 |
+| int8, every vector | 0.711 | 0.342 | 0.403 |
+| Binary codes alone | 0.626 | 0.279 | 0.294 |
+| **Binary candidates + int8 rescore (default)** | 0.703 | 0.341 | 0.399 |
+| Ternary candidates + int8 rescore (experimental) | 0.711 | 0.342 | 0.403 |
+| BM25 alone | 0.678 | 0.305 | 0.238 |
+| **Hybrid: BM25 + vectors, RRF (`notelight search`)** | 0.703 | 0.352 | 0.347 |
+
+The default vector search stays within 0.01 of exact float32 search, and
+ternary candidates close the remaining gap at about 1.5x the candidate-scan
+cost. Hybrid fusion helps where keywords are strong (NFCorpus) and hurts
+where they are weak (FiQA). Against a NumPy implementation of the same
+searches, the Rust core returns identical top-10 lists; its two-stage search
+is 4 to 11x faster, while NumPy's BLAS wins the exhaustive int8 scan by 5x.
+Details and caveats are in [docs/results.md](docs/results.md).
+
+```powershell
+notelight eval                     # downloads 23 MB of data once; FiQA takes ~40 min to embed on a CPU
+```
 
 ## Development
 
@@ -146,8 +177,8 @@ After changing Rust code, rebuild with `maturin develop --release`.
 | 0 | Scaffold: Rust workspace, PyO3 bindings, CI on 3 OSes | ✅ |
 | 1 | Rust core: chunking, BM25, quantized search, index format | ✅ |
 | 2 | Python package: embedder, incremental indexer, CLI | ✅ |
-| 3 | Evaluation: BEIR results table, Rust vs NumPy baseline | ⏳ |
-| 4 | MCP server for AI agents | |
+| 3 | Evaluation: BEIR results table, Rust vs NumPy baseline | ✅ |
+| 4 | MCP server for AI agents | ⏳ |
 | 5 | Web UI, PDF/DOCX, wheels on PyPI | |
 | v2 | Same core compiled to WebAssembly, in-browser app | |
 
@@ -155,10 +186,13 @@ After changing Rust code, rebuild with `maturin develop --release`.
 
 - [Design notes](docs/design-notes.md): why it is built this way
 - [Index format](docs/index-format.md): the on-disk layout, byte by byte
+- [Results](docs/results.md): retrieval quality and latency on BEIR, with the
+  Rust-vs-NumPy comparison
 - Rust walkthroughs for readers coming from C# or Python:
   [milestone 0](docs/learning/m0-rust-walkthrough.md),
   [milestone 1](docs/learning/m1-rust-walkthrough.md),
-  [milestone 2](docs/learning/m2-rust-walkthrough.md)
+  [milestone 2](docs/learning/m2-rust-walkthrough.md),
+  [milestone 3](docs/learning/m3-rust-walkthrough.md)
 
 ## License
 

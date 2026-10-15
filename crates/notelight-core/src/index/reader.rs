@@ -9,7 +9,7 @@ use super::{
 use crate::bm25::Bm25;
 use crate::error::{Error, Result};
 use crate::fuse::{DEFAULT_RRF_K, rrf};
-use crate::vectors::Vectors;
+use crate::vectors::{VectorMode, Vectors};
 
 /// How to open an index.
 #[derive(Debug, Clone, Copy)]
@@ -215,10 +215,26 @@ impl IndexReader {
         k: usize,
         candidates: usize,
     ) -> Result<Vec<(u32, f32)>> {
+        self.search_vector_with(query, k, candidates, VectorMode::default())
+    }
+
+    /// Vector search with an explicit [`VectorMode`], for comparing
+    /// quantization strategies. Scores approximate cosine similarity, except
+    /// in [`VectorMode::Binary`] (see there).
+    ///
+    /// # Errors
+    /// Fails if the index is keyword-only or the query is invalid for the mode.
+    pub fn search_vector_with(
+        &self,
+        query: &[f32],
+        k: usize,
+        candidates: usize,
+        mode: VectorMode,
+    ) -> Result<Vec<(u32, f32)>> {
         self.vectors
             .as_ref()
             .ok_or_else(|| Error::Invalid("this index is keyword-only".into()))?
-            .search(query, k, candidates)
+            .search_with(query, k, candidates, mode)
     }
 
     /// Hybrid search: BM25 and (when `query_vec` is given) vector results,

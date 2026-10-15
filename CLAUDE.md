@@ -31,9 +31,10 @@ crates/notelight-core/   pure Rust engine, no Python/ML/async deps (WASM-portabl
   benches/search.rs      criterion benchmarks (numbers quoted in README)
 crates/notelight-py/     thin PyO3 bindings -> python module notelight._core
 crates/notelight-py/src/ lib.rs, errors.rs (core Error -> Python exceptions), chunking.rs, index.rs
-python/notelight/        Python package: embed.py, ingest.py, indexer.py, search.py, paths.py, cli.py
+python/notelight/        Python package: embed.py, ingest.py, indexer.py, search.py, paths.py, cli.py,
+                         download.py, eval/ (datasets, metrics, NumPy baseline, runner, report)
 tests/                   pytest
-docs/                    design-notes.md, index-format.md (spec), learning/
+docs/                    design-notes.md, index-format.md (spec), results.md (BEIR numbers), learning/
 ```
 
 ## Commands (PowerShell)
@@ -79,8 +80,8 @@ C++, x64/x86 build tools, Windows SDK).
 | 0 | Scaffold, PyO3, CI on 3 OSes | done |
 | 1 | Rust core: chunking, BM25, quantized search, RRF, index format | done (independently reviewed; 8 findings fixed) |
 | 2 | Python package: bindings, embedder, incremental indexer, CLI | done |
-| 3 | Eval: BEIR (SciFact, NFCorpus, FiQA) recall@10/nDCG@10 for f32, int8, binary, binary+rescore, ternary+rescore, BM25, hybrid; Rust vs NumPy baseline | **next** |
-| 4 | MCP server (official Python SDK, stdio): search, read_context, list_sources, index_status; demo GIF | |
+| 3 | Eval: BEIR (SciFact, NFCorpus, FiQA) recall@10/nDCG@10 for f32, int8, binary, binary+rescore, ternary+rescore, BM25, hybrid; Rust vs NumPy baseline | done |
+| 4 | MCP server (official Python SDK, stdio): search, read_context, list_sources, index_status; demo GIF | **next** |
 | 5 | Localhost web UI (FastAPI + one page), PDF/DOCX extras, wheels via maturin-action, PyPI | |
 | v2 | Same core compiled to wasm32 + TypeScript browser app | |
 
@@ -97,3 +98,16 @@ C++, x64/x86 build tools, Windows SDK).
   re-embed and makes old indexes refuse queries from the new embedder.
 - `IndexReader.search_bm25` / `search_vector` are exposed separately for the
   M3 eval harness, which needs each retriever on its own.
+
+## Milestone 3 notes (for whoever picks up M4)
+
+- `notelight eval` writes the tables in `docs/results.md` and the README.
+  Re-run it (cached embeddings make it ~1 minute) and update both whenever
+  search code changes. Datasets and embeddings live in
+  `<cache>/eval/`; tests use synthetic BEIR folders and file:// URLs.
+- `IndexReader.search_vector(..., mode=...)` takes one of `VECTOR_MODES`
+  (`int8`, `binary`, `binary+int8`, `ternary+int8`). Ternary masks are derived
+  in memory from int8 codes (`OnceLock`), not stored: no schema change.
+- Open follow-ups from the results: ternary as the default candidate stage
+  (matches exhaustive int8 quality), and a vectorized `int8_dot` (NumPy BLAS
+  wins the exhaustive int8 scan 5x).

@@ -8,6 +8,11 @@
 //! - **Int8**: each dimension scaled to `-127..=127` with one `f32` scale per
 //!   vector. It is about 4x smaller than `f32` and keeps ~99% of the ranking
 //!   quality. It is used to re-score the binary candidates.
+//!
+//! A third encoding, **ternary** (`-1`, `0` or `+1` per dimension), is an
+//! experimental alternative to binary for picking candidates. It is not
+//! stored: the sign is the binary code, and the "is it significant" mask is
+//! derived from the int8 codes when first needed. See [`ternary_mask`].
 
 /// Number of bytes needed to store a binary code of `dim` dimensions.
 #[must_use]
@@ -90,6 +95,77 @@ pub fn dot_f32_i8(query: &[f32], codes: &[i8]) -> f32 {
         .sum()
 }
 
+/// Fraction of a vector's mean absolute value at or below which a dimension
+/// counts as zero in its ternary code.
+///
+/// `0.7` is the threshold of Ternary Weight Networks (Li et al., 2016), the
+/// usual choice for roughly Gaussian values: about 40% of dimensions become
+/// zero, and the rest keep only their sign.
+pub const TERNARY_THRESHOLD: f32 = 0.7;
+
+/// The mask half of a ternary code: bit `i` is set when
+/// `|v[i]| > TERNARY_THRESHOLD * mean(|v|)`.
+///
+/// Combined with the binary code (the sign), it gives each dimension a value
+/// in `{-1, 0, +1}`. The threshold is relative to the vector's own mean, so
+/// scaling `v` (for example, int8 codes instead of floats) gives the same
+/// mask. Bits are packed like [`quantize_binary`]; an all-zero or non-finite
+/// vector gets an empty mask.
+#[must_use]
+pub fn ternary_mask(v: &[f32]) -> Vec<u8> {
+    let mut out = vec![0u8; binary_code_len(v.len())];
+    if v.is_empty() {
+        return out;
+    }
+    let mean_abs = v.iter().map(|x| x.abs()).sum::<f32>() / v.len() as f32;
+    if !mean_abs.is_finite() {
+        return out;
+    }
+    let threshold = TERNARY_THRESHOLD * mean_abs;
+    for (i, &x) in v.iter().enumerate() {
+        if x.abs() > threshold {
+            out[i / 8] |= 1 << (i % 8);
+        }
+    }
+    out
+}
+
+/// Dot product of two ternary codes, each given as `(sign, mask)` bit planes.
+///
+/// A dimension contributes `+1` when it is significant in both vectors and the
+/// signs agree, `-1` when they disagree, and `0` otherwise. With
+/// `both = mask_a & mask_b`, that is
+/// `popcount(both) - 2 * popcount(both & (sign_a ^ sign_b))`, eight bytes at a
+/// time like [`hamming`].
+///
+/// # Panics
+/// Panics if the four slices do not all have the same length.
+#[must_use]
+pub fn ternary_dot(sign_a: &[u8], mask_a: &[u8], sign_b: &[u8], mask_b: &[u8]) -> i64 {
+    let len = sign_a.len();
+    assert!(
+        mask_a.len() == len && sign_b.len() == len && mask_b.len() == len,
+        "ternary codes must have equal length"
+    );
+    let (mut both, mut differ) = (0u32, 0u32);
+    // One step over 64 dimensions (or 8 for the tail), as integers.
+    let mut tally = |sa: u64, ma: u64, sb: u64, mb: u64| {
+        let m = ma & mb;
+        both += m.count_ones();
+        differ += (m & (sa ^ sb)).count_ones();
+    };
+    // Each is (whole 8-byte words, leftover bytes).
+    let [sa, ma, sb, mb] = [sign_a, mask_a, sign_b, mask_b].map(<[u8]>::as_chunks::<8>);
+    let w = u64::from_le_bytes;
+    for (((s1, m1), s2), m2) in sa.0.iter().zip(ma.0).zip(sb.0).zip(mb.0) {
+        tally(w(*s1), w(*m1), w(*s2), w(*m2));
+    }
+    for (((&s1, &m1), &s2), &m2) in sa.1.iter().zip(ma.1).zip(sb.1).zip(mb.1) {
+        tally(s1.into(), m1.into(), s2.into(), m2.into());
+    }
+    i64::from(both) - 2 * i64::from(differ)
+}
+
 /// Return `v` scaled to unit L2 norm, or unchanged if its norm is zero.
 #[must_use]
 pub fn l2_normalized(v: &[f32]) -> Vec<f32> {
@@ -150,6 +226,35 @@ mod tests {
         let (codes, scale) = quantize_int8(&v);
         let approx = dot_f32_i8(&q, &codes) * scale;
         assert!((approx - 0.96).abs() < 0.01, "{approx}");
+    }
+
+    #[test]
+    fn ternary_mask_keeps_large_dimensions() {
+        // mean |v| = 3.1 / 9 ≈ 0.344, threshold ≈ 0.241: dims 0, 2 and 8 count.
+        let v = [1.0_f32, 0.1, -0.9, 0.0, 0.2, -0.2, 0.1, 0.1, 0.5];
+        assert_eq!(ternary_mask(&v), vec![0b0000_0101, 0b0000_0001]);
+        // Scale-invariant, so int8 codes give the same mask as floats.
+        let scaled: Vec<f32> = v.iter().map(|x| x * 127.0).collect();
+        assert_eq!(ternary_mask(&scaled), ternary_mask(&v));
+        assert_eq!(ternary_mask(&[0.0; 4]), vec![0]);
+        assert_eq!(ternary_mask(&[]), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn ternary_dot_counts_agreements_minus_disagreements() {
+        // a = [+1, -1, 0, +1], b = [+1, +1, +1, 0] -> 1 - 1 + 0 + 0 = 0
+        let a = [1.0_f32, -1.0, 0.0, 1.0];
+        let b = [1.0_f32, 1.0, 1.0, 0.0];
+        let (sa, ma) = (quantize_binary(&a), ternary_mask(&a));
+        let (sb, mb) = (quantize_binary(&b), ternary_mask(&b));
+        assert_eq!(ternary_dot(&sa, &ma, &sb, &mb), 0);
+        // A vector with itself: one per significant dimension.
+        assert_eq!(ternary_dot(&sa, &ma, &sa, &ma), 3);
+        // 8-byte word path plus a 3-byte remainder.
+        let ones = [0xFFu8; 11];
+        let zeros = [0u8; 11];
+        assert_eq!(ternary_dot(&ones, &ones, &ones, &ones), 88);
+        assert_eq!(ternary_dot(&ones, &ones, &zeros, &ones), -88);
     }
 
     #[test]

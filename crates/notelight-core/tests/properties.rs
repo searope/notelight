@@ -5,10 +5,13 @@ use std::collections::HashMap;
 
 use notelight_core::bm25::{Bm25, Bm25Builder, Bm25Params};
 use notelight_core::chunk::{ChunkOpts, chunk_text};
-use notelight_core::quant::{hamming, quantize_binary, quantize_int8};
+use notelight_core::quant::{
+    TERNARY_THRESHOLD, hamming, l2_normalized, quantize_binary, quantize_int8, ternary_dot,
+    ternary_mask,
+};
 use notelight_core::tokenize::tokenize;
 use notelight_core::topk::{smallest_k_by_histogram, top_k};
-use notelight_core::vectors::{VectorBuilder, Vectors};
+use notelight_core::vectors::{VectorBuilder, VectorMode, Vectors};
 use proptest::prelude::*;
 
 /// Markdown-ish documents: headings, fences, paragraphs, blank lines, long
@@ -186,4 +189,87 @@ proptest! {
             idx.search_int8_exhaustive(&q, k).unwrap()
         );
     }
+
+    #[test]
+    fn ternary_dot_matches_reference(
+        a in prop::collection::vec(-1.0f32..1.0, 1..200),
+        seed in any::<u64>(),
+    ) {
+        let b: Vec<f32> = (0..a.len()).map(|i| ((seed.rotate_left(i as u32) & 0xff) as f32) - 127.5).collect();
+        // Reference: each dimension becomes -1, 0 or +1, then a plain dot product.
+        let ternary = |v: &[f32]| -> Vec<i64> {
+            let threshold = TERNARY_THRESHOLD * (v.iter().map(|x| x.abs()).sum::<f32>() / v.len() as f32);
+            v.iter().map(|&x| if x.abs() > threshold { if x > 0.0 { 1 } else { -1 } } else { 0 }).collect()
+        };
+        let reference: i64 = ternary(&a).iter().zip(ternary(&b)).map(|(x, y)| x * y).sum();
+        let (sa, ma) = (quantize_binary(&a), ternary_mask(&a));
+        let (sb, mb) = (quantize_binary(&b), ternary_mask(&b));
+        prop_assert_eq!(ternary_dot(&sa, &ma, &sb, &mb), reference);
+        prop_assert_eq!(ternary_dot(&sa, &ma, &sb, &mb), ternary_dot(&sb, &mb, &sa, &ma));
+        // Padding bits past `dim` are never set.
+        if a.len() % 8 != 0 {
+            prop_assert_eq!(ma.last().unwrap() >> (a.len() % 8), 0);
+        }
+    }
+
+    #[test]
+    fn binary_mode_matches_a_hamming_sort(
+        vs in prop::collection::vec(prop::collection::vec(-1.0f32..1.0, 24), 1..60),
+        q in prop::collection::vec(-1.0f32..1.0, 24),
+        k in 1usize..10,
+    ) {
+        prop_assume!(q.iter().any(|x| *x != 0.0));
+        let idx = build(&vs);
+        let qc = quantize_binary(&q);
+        let mut reference: Vec<u32> = (0..vs.len() as u32).collect();
+        reference.sort_by_key(|&i| (hamming(&qc, &quantize_binary(&vs[i as usize])), i));
+        reference.truncate(k);
+        let got: Vec<u32> = idx.search_with(&q, k, 0, VectorMode::Binary).unwrap().iter().map(|h| h.0).collect();
+        prop_assert_eq!(got, reference);
+    }
+
+    #[test]
+    fn ternary_search_rescores_the_best_ternary_candidates(
+        vs in prop::collection::vec(prop::collection::vec(-1.0f32..1.0, 24), 1..60),
+        q in prop::collection::vec(-1.0f32..1.0, 24),
+        k in 1usize..10,
+        candidates in 1usize..40,
+    ) {
+        prop_assume!(q.iter().any(|x| *x != 0.0));
+        let idx = build(&vs);
+        let n = vs.len();
+        // Stored ternary codes come from the int8 codes of the normalized vector.
+        let stored: Vec<(Vec<u8>, Vec<u8>)> = vs.iter().map(|v| {
+            let v = l2_normalized(v);
+            let codes: Vec<f32> = quantize_int8(&v).0.iter().map(|&c| f32::from(c)).collect();
+            (quantize_binary(&v), ternary_mask(&codes))
+        }).collect();
+        let qn = l2_normalized(&q);
+        let (qs, qm) = (quantize_binary(&qn), ternary_mask(&qn));
+        let mut cands: Vec<u32> = (0..n as u32).collect();
+        cands.sort_by_key(|&i| {
+            let (s, m) = &stored[i as usize];
+            (-ternary_dot(&qs, &qm, s, m), i)
+        });
+        cands.truncate(candidates.max(k));
+        // Rescore with the index's own int8 scores, best first, ties by id.
+        let int8: HashMap<u32, f32> = idx.search_with(&q, n, 0, VectorMode::Int8).unwrap().into_iter().collect();
+        let mut reference: Vec<(u32, f32)> = cands.iter().map(|&i| (i, int8[&i])).collect();
+        reference.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+        reference.truncate(k);
+        prop_assert_eq!(idx.search_with(&q, k, candidates, VectorMode::TernaryInt8).unwrap(), reference);
+        // With every vector as a candidate it is exactly the int8 scan.
+        prop_assert_eq!(
+            idx.search_with(&q, k, n, VectorMode::TernaryInt8).unwrap(),
+            idx.search_with(&q, k, 0, VectorMode::Int8).unwrap()
+        );
+    }
+}
+
+fn build(vs: &[Vec<f32>]) -> Vectors<Vec<u8>> {
+    let mut b = VectorBuilder::new(vs[0].len());
+    for v in vs {
+        b.add(v).unwrap();
+    }
+    Vectors::from_bytes(b.finish().unwrap()).unwrap()
 }

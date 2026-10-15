@@ -12,7 +12,10 @@ license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
 authors = [{ name = "Sergey Nefedyev" }]
 keywords = ["search", "semantic-search", "rag", "mcp", "embeddings", "bm25"]
 classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Rust",
   "Operating System :: OS Independent",
   "Topic :: Text Processing :: Indexing",
@@ -31,6 +34,7 @@ notelight = "notelight.cli:app"
 
 [project.urls]
 Repository = "https://github.com/searope/notelight"
+Issues = "https://github.com/searope/notelight/issues"
 
 [tool.maturin]
 manifest-path = "crates/notelight-py/Cargo.toml"

@@ -29,6 +29,7 @@ from pathlib import Path
 
 import filelock
 import numpy as np
+import numpy.typing as npt
 
 from notelight import _core, paths
 from notelight.embed import Embedder
@@ -294,8 +295,10 @@ def _embed_missing(
     return len(missing)
 
 
-def _load_vectors(db: sqlite3.Connection, keys: Sequence[str], dim: int) -> dict[str, np.ndarray]:
-    out: dict[str, np.ndarray] = {}
+def _load_vectors(
+    db: sqlite3.Connection, keys: Sequence[str], dim: int
+) -> dict[str, npt.NDArray[np.float32]]:
+    out: dict[str, npt.NDArray[np.float32]] = {}
     for batch in _batched(list(dict.fromkeys(keys)), 500):
         marks = ",".join("?" * len(batch))
         for key, blob in db.execute(

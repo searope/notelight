@@ -68,7 +68,8 @@ class Embedder(Protocol):
 
 def _l2_normalize(m: Vectors) -> Vectors:
     norms = np.linalg.norm(m, axis=-1, keepdims=True)
-    return (m / np.maximum(norms, 1e-12)).astype(np.float32, copy=False)
+    out: Vectors = (m / np.maximum(norms, 1e-12)).astype(np.float32, copy=False)
+    return out
 
 
 # --------------------------------------------------------------------------

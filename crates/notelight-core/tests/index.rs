@@ -230,10 +230,10 @@ fn empty_index_is_valid() {
     .unwrap();
     let r = IndexReader::open(dir.path(), OpenOptions::default()).unwrap();
     assert!(r.is_empty());
-    assert!(
+    assert_eq!(
         r.search("anything", Some(&[1.0; 8]), &SearchOpts::default())
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [] as [notelight_core::index::Hit; 0]
     );
 }
 

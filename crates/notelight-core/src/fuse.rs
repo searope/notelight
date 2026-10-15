@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn empty_input() {
-        assert!(rrf(&[], DEFAULT_RRF_K, 10).is_empty());
-        assert!(rrf(&[&[]], DEFAULT_RRF_K, 10).is_empty());
+        assert_eq!(rrf(&[], DEFAULT_RRF_K, 10), []);
+        assert_eq!(rrf(&[&[]], DEFAULT_RRF_K, 10), []);
     }
 }

@@ -118,7 +118,7 @@ mod tests {
     fn top_k_orders_by_score_then_id() {
         let items = [(5, 0.5), (1, 0.9), (3, 0.5), (2, 0.1)];
         assert_eq!(top_k(items, 3), [(1, 0.9), (3, 0.5), (5, 0.5)]);
-        assert!(top_k(items, 0).is_empty());
+        assert_eq!(top_k(items, 0), []);
         assert_eq!(top_k(items, 10).len(), 4);
     }
 
@@ -139,6 +139,6 @@ mod tests {
         assert_eq!(smallest_k_by_histogram(&dists, 3), [4, 1, 2]);
         assert_eq!(smallest_k_by_histogram(&dists, 5), [4, 1, 2, 5, 0]);
         assert_eq!(smallest_k_by_histogram(&dists, 100).len(), 7);
-        assert!(smallest_k_by_histogram(&dists, 0).is_empty());
+        assert_eq!(smallest_k_by_histogram(&dists, 0), Vec::<u32>::new());
     }
 }

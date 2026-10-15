@@ -389,8 +389,8 @@ mod tests {
 
     #[test]
     fn empty_and_blank_input_produce_no_chunks() {
-        assert!(chunks("", 100).is_empty());
-        assert!(chunks("\n  \n\t\n", 100).is_empty());
+        assert_eq!(chunks("", 100), []);
+        assert_eq!(chunks("\n  \n\t\n", 100), []);
     }
 
     #[test]
@@ -399,7 +399,7 @@ mod tests {
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].text, "hello\nworld");
         assert_eq!((c[0].line_start, c[0].line_end), (1, 2));
-        assert!(c[0].heading_path.is_empty());
+        assert_eq!(c[0].heading_path, Vec::<String>::new());
     }
 
     #[test]
@@ -480,6 +480,6 @@ mod tests {
         };
         let c = chunk_text("# not special\ntext\n", &opts);
         assert_eq!(c.len(), 1);
-        assert!(c[0].heading_path.is_empty());
+        assert_eq!(c[0].heading_path, Vec::<String>::new());
     }
 }

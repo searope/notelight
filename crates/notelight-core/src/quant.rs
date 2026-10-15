@@ -40,23 +40,17 @@ pub fn quantize_binary(v: &[f32]) -> Vec<u8> {
 #[must_use]
 pub fn hamming(a: &[u8], b: &[u8]) -> u32 {
     assert_eq!(a.len(), b.len(), "binary codes must have equal length");
-    let mut words_a = a.chunks_exact(8);
-    let mut words_b = b.chunks_exact(8);
+    let (words_a, rest_a) = a.as_chunks::<8>();
+    let (words_b, rest_b) = b.as_chunks::<8>();
     let mut dist: u32 = words_a
-        .by_ref()
-        .zip(words_b.by_ref())
-        .map(|(x, y)| (word(x) ^ word(y)).count_ones())
+        .iter()
+        .zip(words_b)
+        .map(|(x, y)| (u64::from_le_bytes(*x) ^ u64::from_le_bytes(*y)).count_ones())
         .sum();
-    for (x, y) in words_a.remainder().iter().zip(words_b.remainder()) {
+    for (x, y) in rest_a.iter().zip(rest_b) {
         dist += (x ^ y).count_ones();
     }
     dist
-}
-
-#[inline]
-fn word(bytes: &[u8]) -> u64 {
-    // `chunks_exact(8)` guarantees the length, so this conversion cannot fail.
-    u64::from_le_bytes(bytes.try_into().expect("chunk of 8 bytes"))
 }
 
 /// Quantize one vector to int8 with a single symmetric scale.

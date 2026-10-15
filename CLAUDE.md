@@ -54,7 +54,7 @@ C++, x64/x86 build tools, Windows SDK).
 ## Conventions (enforced by CI)
 
 - Clippy `pedantic` with `-D warnings`. The CI lint job is pinned to Rust
-  1.97.0, so bump it deliberately and fix new lints in the same change.
+  1.99.0, so bump it deliberately and fix new lints in the same change.
 - `unsafe_code = "deny"`. The only exception is `index/storage.rs`
   (`Mmap::map`), which carries a `// SAFETY:` argument. Keep it that way.
 - Binary formats are decoded with `from_le_bytes` at validated offsets, never
@@ -82,12 +82,6 @@ C++, x64/x86 build tools, Windows SDK).
 | 4 | MCP server (official Python SDK, stdio): search, read_context, list_sources, index_status; demo GIF | |
 | 5 | Localhost web UI (FastAPI + one page), PDF/DOCX extras, wheels via maturin-action, PyPI | |
 | v2 | Same core compiled to wasm32 + TypeScript browser app | |
-
-Open item: the first CI run of milestone 1 failed only in the lint job on the
-latest stable clippy, even though clippy 1.97 passes locally. The logs were not
-reachable from the environment that built M1, so the lint job was pinned to
-1.97.0. Run `rustup update; cargo clippy --workspace --all-targets -- -D warnings`
-locally to see the new lint(s), fix them, then unpin or bump.
 
 ## Milestone 2 plan
 

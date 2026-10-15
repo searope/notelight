@@ -278,6 +278,13 @@ fn write_synced(path: &Path, bytes: &[u8]) -> Result<()> {
 
 /// Persist directory entries (renames) on Unix. Windows has no equivalent
 /// for directories; NTFS journals metadata changes itself.
+#[cfg_attr(
+    not(unix),
+    allow(
+        clippy::unnecessary_wraps,
+        reason = "fallible on Unix, a no-op elsewhere"
+    )
+)]
 fn sync_dir(dir: &Path) -> Result<()> {
     #[cfg(unix)]
     {

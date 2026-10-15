@@ -350,7 +350,7 @@ mod tests {
         let hits = idx.search("fox", 10);
         assert_eq!(hits.iter().map(|h| h.0).collect::<Vec<_>>(), [1, 0]);
         assert!(hits[0].1 > hits[1].1);
-        assert!(idx.search("cat", 10).is_empty());
+        assert_eq!(idx.search("cat", 10), []);
     }
 
     #[test]
@@ -378,7 +378,7 @@ mod tests {
     fn empty_index_answers_nothing() {
         let idx = index(&[]);
         assert!(idx.is_empty());
-        assert!(idx.search("anything", 5).is_empty());
+        assert_eq!(idx.search("anything", 5), []);
     }
 
     #[test]

@@ -95,7 +95,7 @@ for hit in Searcher("~/notes", embedder).search("release hotfixes", k=5):
 
 ```
             ┌────────────── notelight-core (Rust) ─────────────┐
-            │ chunking · BM25 · binary + int8 search · RRF     │
+            │ chunking · BM25 · ternary + int8 search · RRF    │
             │ memory-mapped, versioned index format            │
             └───────┬──────────────────────────────┬───────────┘
               PyO3 / maturin                 wasm-bindgen (v2)
@@ -117,14 +117,16 @@ AVX). These are indicative numbers, not a tuned benchmark:
 
 | Operation | Size | Time |
 |---|---|---|
-| Vector search, binary candidates + int8 rescore (k=10, 200 candidates) | 100k × 384-dim | 0.8 ms |
-| Same, exhaustive int8 scan (reference) | 100k × 384-dim | 7.9 ms |
+| Vector search, ternary candidates + int8 rescore (default; k=10, 200 candidates) | 100k × 384-dim | 1.5 ms |
+| Same, binary candidates instead of ternary | 100k × 384-dim | 0.8 ms |
+| Same, exhaustive int8 scan (reference) | 100k × 384-dim | 8.1 ms |
 | BM25 query, 3 terms | 100k chunks | 0.16 ms |
-| Markdown chunking | 1 MB document | 7.4 ms (≈130 MiB/s) |
+| Markdown chunking | 1 MB document | 8.4 ms (≈116 MiB/s) |
 
-The two-stage search is about 10× faster than scanning every int8 vector,
-because the binary pass compares 48 bytes per vector with `popcount`, and only
-200 candidates are re-scored. The int8 dot product keeps 16 partial sums so
+The default two-stage search is about 5× faster than scanning every int8
+vector, because the ternary pass compares 96 bytes per vector (sign bits and
+mask) with `popcount`, and only 200 candidates are re-scored. Binary
+candidates halve the scan but lose up to 0.01 nDCG@10 ([below](#retrieval-quality)). The int8 dot product keeps 16 partial sums so
 the compiler can use SIMD; see
 [the note on vectorizing it](docs/learning/m3-int8-dot-vectorization.md).
 
@@ -140,17 +142,17 @@ recall@10, latency and the setup):
 | Exact float32 search (reference) | 0.713 | 0.344 | 0.403 |
 | int8, every vector | 0.711 | 0.342 | 0.403 |
 | Binary codes alone | 0.626 | 0.279 | 0.294 |
-| **Binary candidates + int8 rescore (default)** | 0.703 | 0.341 | 0.399 |
-| Ternary candidates + int8 rescore (experimental) | 0.711 | 0.342 | 0.403 |
+| Binary candidates + int8 rescore | 0.703 | 0.341 | 0.399 |
+| **Ternary candidates + int8 rescore (default)** | 0.711 | 0.342 | 0.403 |
 | BM25 alone | 0.678 | 0.305 | 0.238 |
-| **Hybrid: BM25 + vectors, RRF (`notelight search`)** | 0.703 | 0.352 | 0.347 |
+| **Hybrid: BM25 + vectors, RRF (`notelight search`)** | 0.710 | 0.350 | 0.349 |
 
-The default vector search stays within 0.01 of exact float32 search, and
-ternary candidates close the remaining gap at about 1.5x the candidate-scan
-cost. Hybrid fusion helps where keywords are strong (NFCorpus) and hurts
-where they are weak (FiQA). Against a NumPy implementation of the same
-searches, the Rust core returns identical top-10 lists; its two-stage search
-is 7 to 13x faster, while NumPy's multi-threaded BLAS still wins the
+The default vector search, ternary candidates re-scored with int8, matches
+exhaustive int8 to three decimals and is within 0.002 of exact float32
+search; binary candidates lose up to 0.01. Hybrid fusion helps where keywords
+are strong (NFCorpus) and hurts where they are weak (FiQA). Against a NumPy
+implementation of the binary searches, the Rust core returns identical top-10
+lists; its binary two-stage search is 7 to 13x faster, while NumPy's multi-threaded BLAS still wins the
 exhaustive int8 scan by 1.3 to 1.6x (it was 5x before the int8 dot product
 was vectorized).
 Details and caveats are in [docs/results.md](docs/results.md).

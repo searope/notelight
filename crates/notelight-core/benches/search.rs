@@ -8,7 +8,7 @@ use std::hint::black_box;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use notelight_core::bm25::{Bm25, Bm25Builder, Bm25Params};
 use notelight_core::chunk::{ChunkOpts, chunk_text};
-use notelight_core::vectors::{VectorBuilder, Vectors};
+use notelight_core::vectors::{VectorBuilder, VectorMode, Vectors};
 
 const DIM: usize = 384;
 
@@ -45,8 +45,15 @@ fn bench_vectors(c: &mut Criterion) {
     group.sample_size(20);
     for n in [10_000, 100_000] {
         let (idx, q) = vectors(n);
-        group.bench_with_input(BenchmarkId::new("binary+int8_rescore", n), &n, |b, _| {
+        // The default search.
+        group.bench_with_input(BenchmarkId::new("ternary+int8_rescore", n), &n, |b, _| {
             b.iter(|| idx.search(black_box(&q), 10, 200).unwrap());
+        });
+        group.bench_with_input(BenchmarkId::new("binary+int8_rescore", n), &n, |b, _| {
+            b.iter(|| {
+                idx.search_with(black_box(&q), 10, 200, VectorMode::BinaryInt8)
+                    .unwrap()
+            });
         });
         group.bench_with_input(BenchmarkId::new("int8_exhaustive", n), &n, |b, _| {
             b.iter(|| idx.search_int8_exhaustive(black_box(&q), 10).unwrap());

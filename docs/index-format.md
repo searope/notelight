@@ -1,4 +1,4 @@
-# Index format (schema version 1)
+# Index format (schema version 2)
 
 An index is a directory of immutable **generations**. A generation is written
 once, never modified, and replaced as a whole by the next one.
@@ -47,7 +47,7 @@ lock file.
 ```json
 {
   "format": "notelight-index",
-  "schema_version": 1,
+  "schema_version": 2,
   "created_by": "notelight-core 0.1.0",
   "generation": 7,
   "n_chunks": 1834,
@@ -125,8 +125,9 @@ then the chunk text.
 ### vectors.bin: quantized embeddings (magic `NLVC`)
 
 ```
-header   a = n, b = dim
+header   version 2, a = n, b = dim
 binary   [u8; n * ceil(dim / 8)]   sign bits, little-endian bit order, padded to 4 bytes
+masks    [u8; n * ceil(dim / 8)]   ternary masks, same bit order, padded to 4 bytes
 scales   [f32; n]                  int8 scale per vector
 int8     [i8; n * dim]             round(x / scale), clamped to -127..=127
 ```
@@ -135,10 +136,15 @@ Vectors are L2-normalized before quantization. Bit `j` of vector `i` is bit
 `j % 8` of byte `i * ceil(dim/8) + j / 8`, which matches
 `numpy.packbits(v > 0, bitorder="little")`.
 
-Ternary codes (the experimental `ternary+int8` search mode) are not stored.
-Their sign plane is the binary code above, and their mask plane is derived
-from the int8 codes when a reader first needs it, so they add nothing to this
-layout and need no schema change.
+A vector's ternary code (used by the default `ternary+int8` search) is its
+sign bits plus its mask. Mask bit `j` is set when
+`|c_j| > 0.7 * mean(|c|)`, where `c` are the vector's int8 codes taken as
+floats (`quant::ternary_mask`), so a mask can always be recomputed from the
+stored codes. Padding bits past `dim` in the last byte of a sign code or a
+mask are written as zero and never read: the query's own mask is zero there.
+
+Schema version 1 had no mask plane and derived the masks on first use; a
+version 1 index is rejected and rebuilt.
 
 ## Versioning rules
 

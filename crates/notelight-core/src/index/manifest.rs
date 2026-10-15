@@ -11,7 +11,7 @@ use crate::error::{Error, Result};
 pub const FORMAT_NAME: &str = "notelight-index";
 
 /// Schema version written by this build. Bump on any incompatible change.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Description of one index generation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

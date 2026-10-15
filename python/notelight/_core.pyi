@@ -148,15 +148,14 @@ class IndexReader:
         vector: npt.NDArray[np.float32],
         k: int,
         candidates: int = 200,
-        mode: VectorMode = "binary+int8",
+        mode: VectorMode = "ternary+int8",
     ) -> list[tuple[int, float]]:
         """Vector search only: (id, cosine) pairs.
 
-        mode: "binary+int8" (default, as in hybrid search), "ternary+int8"
-        (ternary candidates, experimental), "binary" (Hamming distance alone;
-        scores are 1 - 2 * distance / dim) or "int8" (every vector, no
-        candidate stage). The first "ternary+int8" call derives ternary masks
-        from the int8 codes. Raises ValueError on an unknown mode.
+        mode: "ternary+int8" (default, as in hybrid search), "binary+int8"
+        (binary candidates instead of ternary ones), "binary" (Hamming
+        distance alone; scores are 1 - 2 * distance / dim) or "int8" (every
+        vector, no candidate stage). Raises ValueError on an unknown mode.
         """
 
     def chunk(self, id: int) -> ChunkRecord:

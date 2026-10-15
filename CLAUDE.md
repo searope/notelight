@@ -106,8 +106,8 @@ C++, x64/x86 build tools, Windows SDK).
   search code changes. Datasets and embeddings live in
   `<cache>/eval/`; tests use synthetic BEIR folders and file:// URLs.
 - `IndexReader.search_vector(..., mode=...)` takes one of `VECTOR_MODES`
-  (`int8`, `binary`, `binary+int8`, `ternary+int8`). Ternary masks are derived
-  in memory from int8 codes (`OnceLock`), not stored: no schema change.
-- Open follow-ups from the results: ternary as the default candidate stage
-  (matches exhaustive int8 quality), and a vectorized `int8_dot` (NumPy BLAS
-  wins the exhaustive int8 scan 5x).
+  (`int8`, `binary`, `binary+int8`, `ternary+int8`). `ternary+int8` is the
+  default (it matches exhaustive int8 quality); its masks are stored in
+  `vectors.bin` (schema version 2), computed from the int8 codes.
+- Open follow-up from the results: a vectorized `int8_dot` (NumPy BLAS wins
+  the exhaustive int8 scan 5x).

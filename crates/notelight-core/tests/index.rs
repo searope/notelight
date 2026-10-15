@@ -202,7 +202,10 @@ fn corrupt_or_foreign_indexes_are_rejected() {
     let text = fs::read_to_string(&manifest).unwrap();
     fs::write(
         &manifest,
-        text.replace("\"schema_version\": 1", "\"schema_version\": 99"),
+        text.replace(
+            &format!("\"schema_version\": {}", index::SCHEMA_VERSION),
+            "\"schema_version\": 99",
+        ),
     )
     .unwrap();
     assert!(matches!(

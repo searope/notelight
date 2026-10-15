@@ -50,7 +50,7 @@ F32 = npt.NDArray[np.float32]
 #: Every method `evaluate` can run, in report order. `f32` is exact cosine
 #: similarity in NumPy (the quality ceiling for the vector methods); the four
 #: quantized modes are the Rust core's `VectorMode`s; `bm25` is keyword search
-#: alone; `hybrid` is what `notelight search` does: BM25 and binary+int8,
+#: alone; `hybrid` is what `notelight search` does: BM25 and ternary+int8,
 #: fused with reciprocal rank fusion.
 METHODS: tuple[str, ...] = ("f32", *_core.VECTOR_MODES, "bm25", "hybrid")
 
@@ -291,7 +291,7 @@ def evaluate(
     if not query_ids:
         return result
     for method in methods:
-        run(method, 0)  # warm-up: page in the index, build ternary masks
+        run(method, 0)  # warm-up: page in the index
         ndcgs, recalls, times = [], [], []
         for qi, qid in enumerate(query_ids):
             ids, ms = _timed(run, method, qi)

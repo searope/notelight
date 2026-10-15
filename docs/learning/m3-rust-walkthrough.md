@@ -96,6 +96,13 @@ calling a `&mut self` method does.
 
 ## 3. Lazy, thread-safe state: `OnceLock` (`Vectors::ternary_masks`)
 
+> **Update after milestone 3:** once ternary became the default search, the
+> masks moved into `vectors.bin` (schema version 2), so this `OnceLock` no
+> longer exists: a CLI query opens a fresh reader every time and would pay for
+> the derivation on each one (see `docs/design-notes.md`, "Ternary is the
+> default"). The pattern still applies; to read the code as it was, run
+> `git show d6d50aa:crates/notelight-core/src/vectors.rs`.
+
 ```rust
 pub struct Vectors<B> {
     ...
@@ -225,7 +232,8 @@ Two results are directly about the Rust in this guide:
 
 ## Exercises
 
-1. Replace `OnceLock` with `std::cell::OnceCell` in `Vectors`. Build
+1. On a checkout of `d6d50aa` (before the masks were stored), replace
+   `OnceLock` with `std::cell::OnceCell` in `Vectors`. Build
    `notelight-py` and read the error. Which trait is missing, and which
    `#[pyclass]` option requires it?
 2. Remove the parentheses in the reference threshold in

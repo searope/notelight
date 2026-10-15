@@ -272,7 +272,9 @@ proptest! {
         let mut reference: Vec<(u32, f32)> = cands.iter().map(|&i| (i, int8[&i])).collect();
         reference.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
         reference.truncate(k);
-        prop_assert_eq!(idx.search_with(&q, k, candidates, VectorMode::TernaryInt8).unwrap(), reference);
+        prop_assert_eq!(idx.search_with(&q, k, candidates, VectorMode::TernaryInt8).unwrap(), reference.clone());
+        // Ternary is the default mode.
+        prop_assert_eq!(idx.search(&q, k, candidates).unwrap(), reference);
         // With every vector as a candidate it is exactly the int8 scan.
         prop_assert_eq!(
             idx.search_with(&q, k, n, VectorMode::TernaryInt8).unwrap(),

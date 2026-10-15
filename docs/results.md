@@ -26,10 +26,10 @@ The embedder truncates documents at 512 tokens; BM25 sees the full text.
 | `f32` (exact, reference) | 0.713 | 0.344 | 0.403 | 0.836 | 0.162 | 0.464 |
 | `int8` | 0.711 | 0.342 | 0.403 | 0.840 | 0.162 | 0.463 |
 | `binary` | 0.626 | 0.279 | 0.294 | 0.745 | 0.132 | 0.353 |
-| `binary+int8` (default) | 0.703 | 0.341 | 0.399 | 0.821 | 0.160 | 0.457 |
-| `ternary+int8` | 0.711 | 0.342 | 0.403 | 0.840 | 0.161 | 0.463 |
+| `binary+int8` | 0.703 | 0.341 | 0.399 | 0.821 | 0.160 | 0.457 |
+| `ternary+int8` (default) | 0.711 | 0.342 | 0.403 | 0.840 | 0.161 | 0.463 |
 | `bm25` | 0.678 | 0.305 | 0.238 | 0.803 | 0.146 | 0.296 |
-| `hybrid` (what `notelight search` returns) | 0.703 | 0.352 | 0.347 | 0.829 | 0.166 | 0.431 |
+| `hybrid` (what `notelight search` returns) | 0.710 | 0.350 | 0.349 | 0.839 | 0.165 | 0.424 |
 
 What the table says:
 
@@ -40,19 +40,19 @@ What the table says:
 - **int8 is free.** Exhaustive int8 is within 0.002 nDCG@10 of f32 on all
   three datasets, at a quarter of the size.
 - **Binary alone is not enough.** Sign bits lose 0.06 to 0.11 nDCG@10.
-- **Re-scoring 200 binary candidates recovers most of it.** The default
-  `binary+int8` is 0.004 to 0.010 below f32.
-- **Ternary candidates recover all of it.** With the same 200 candidates,
-  `ternary+int8` is indistinguishable from exhaustive int8 (identical nDCG@10
-  to three decimals on all three datasets). Dropping the near-zero dimensions
-  makes the candidate stage pick the right 200 almost every time. It costs
-  about 1.5x the binary scan (two bit planes instead of one), which on FiQA is
-  1.0 ms instead of 0.6 ms per query. This is the strongest argument for
-  making ternary the default; see [What changes next](#what-changes-next).
+- **Re-scoring 200 binary candidates recovers most of it.** `binary+int8`
+  is 0.004 to 0.010 below f32.
+- **Ternary candidates recover all of it, so they are the default.** With the
+  same 200 candidates, `ternary+int8` is indistinguishable from exhaustive
+  int8 (identical nDCG@10 to three decimals on all three datasets). Dropping
+  the near-zero dimensions makes the candidate stage pick the right 200
+  almost every time. Two bit planes instead of one cost about 0.3 ms more per
+  query on FiQA (0.82 ms instead of 0.48 ms). The masks are stored in the
+  index (schema version 2), about 11% more vector data.
 - **Hybrid is not a free win.** RRF gives each retriever equal say. Where
   BM25 is nearly as good as the embeddings (SciFact, NFCorpus), the fusion
-  matches or beats either alone. On FiQA, where BM25 is 0.17 nDCG@10 behind,
-  it drags the fused list down (0.347 vs 0.399). Notes, with their exact
+  matches the vectors (SciFact) or beats both (NFCorpus). On FiQA, where BM25
+  is 0.17 nDCG@10 behind, it drags the fused list down (0.349 vs 0.403). Notes, with their exact
   names, identifiers and error codes, are closer to the first case, which is
   why hybrid stays the default, but the number is reported as it is.
 - **BM25 has no stemming** (by design, see the design notes). Published
@@ -63,28 +63,26 @@ What the table says:
 
 Median milliseconds per query, measured from Python around one call (so each
 includes a few microseconds of binding overhead), excluding query embedding.
-`f32` is NumPy; every other method is the Rust core on one thread. The
-`int8` and `binary+int8` rows were re-measured after the int8 dot product was
-vectorized (see [Rust vs NumPy](#rust-vs-numpy)); the others are from the
-original run.
+`f32` is NumPy; every other method is the Rust core on one thread.
 
 | Method | SciFact | NFCorpus | FiQA |
 |---|---:|---:|---:|
-| `f32` (NumPy) | 0.23 | 0.20 | 3.27 |
-| `int8` | 0.37 | 0.26 | 4.60 |
-| `binary` | 0.06 | 0.04 | 0.54 |
-| `binary+int8` | 0.07 | 0.06 | 0.54 |
-| `ternary+int8` | 0.16 | 0.13 | 1.01 |
-| `bm25` | 0.04 | 0.01 | 0.26 |
-| `hybrid` | 0.20 | 0.14 | 0.97 |
+| `f32` (NumPy) | 0.22 | 0.23 | 3.27 |
+| `int8` | 0.37 | 0.26 | 4.64 |
+| `binary` | 0.05 | 0.04 | 0.42 |
+| `binary+int8` | 0.07 | 0.06 | 0.48 |
+| `ternary+int8` (default) | 0.10 | 0.08 | 0.82 |
+| `bm25` | 0.05 | 0.02 | 0.27 |
+| `hybrid` | 0.17 | 0.10 | 1.23 |
 
 Embedding the query with bge-small takes about 5 ms on this CPU, more than
 any search here, so for a personal folder the search is never the
 bottleneck.
 
-The first `ternary+int8` search on an opened index also derives the ternary
-masks from the int8 codes: 117 ms once for FiQA, excluded above (the harness
-runs one warm-up query per method).
+Every search reads the ternary masks straight from the index, so there is no
+warm-up cost. Before schema version 2 the masks were derived from the int8
+codes on the first ternary search, which took 117 ms on FiQA for every newly
+opened index.
 
 ## Rust vs NumPy
 
@@ -93,20 +91,20 @@ The same three searches, implemented in NumPy the way a NumPy user would
 
 | Dataset | Search | Rust ms | NumPy ms | NumPy / Rust | Top-10 agreement |
 |---|---|---:|---:|---:|---:|
-| SciFact | `int8` | 0.41 | 0.26 | 0.6x | 1.000 |
-| SciFact | `binary` | 0.05 | 0.60 | 12.0x | 1.000 |
-| SciFact | `binary+int8` | 0.09 | 0.68 | 7.3x | 1.000 |
+| SciFact | `int8` | 0.41 | 0.25 | 0.6x | 1.000 |
+| SciFact | `binary` | 0.05 | 0.62 | 11.7x | 1.000 |
+| SciFact | `binary+int8` | 0.09 | 0.68 | 7.4x | 1.000 |
 | NFCorpus | `int8` | 0.27 | 0.20 | 0.7x | 1.000 |
 | NFCorpus | `binary` | 0.04 | 0.43 | 11.7x | 1.000 |
-| NFCorpus | `binary+int8` | 0.07 | 0.51 | 7.0x | 1.000 |
-| FiQA | `int8` | 4.61 | 3.55 | 0.8x | 1.000 |
-| FiQA | `binary` | 0.53 | 7.58 | 14.2x | 1.000 |
-| FiQA | `binary+int8` | 0.59 | 7.47 | 12.8x | 1.000 |
+| NFCorpus | `binary+int8` | 0.07 | 0.50 | 7.2x | 1.000 |
+| FiQA | `int8` | 4.65 | 3.45 | 0.7x | 1.000 |
+| FiQA | `binary` | 0.52 | 7.34 | 14.1x | 1.000 |
+| FiQA | `binary+int8` | 0.58 | 7.48 | 12.8x | 1.000 |
 
 - **Agreement is 1.000 everywhere**: for every query, both implementations
   return the same top 10. That cross-checks the Rust bit packing, int8
   rounding and tie-breaking against an independent implementation.
-- **The two-stage search is 7 to 13x faster in Rust.** XOR + popcount over
+- **The binary two-stage search is 7 to 13x faster in Rust.** XOR + popcount over
   packed `u64` words and a histogram cut-off beat NumPy's
   `bitwise_xor` + `bitwise_count` + `argpartition`, which allocate a full-size
   temporary at every step.
@@ -124,11 +122,8 @@ The same three searches, implemented in NumPy the way a NumPy user would
 
 ## What changes next
 
-- **Ternary as the default candidate stage.** It matches exhaustive int8
-  quality at about 1 ms per query on 57k documents. Making it the default means
-  storing the masks (48 more bytes per 384-dim vector, about 11% more
-  vector data, and a `SCHEMA_VERSION` bump) or keeping the one-time
-  derivation on first search (117 ms at FiQA scale, once per opened index).
+- **A NumPy baseline for `ternary+int8`.** The cross-check above covers
+  the binary searches but not the new default.
 - **AVX2 for `int8_dot` via runtime feature detection**, which would close
   the remaining gap to NumPy on exhaustive scans without giving up portable
   wheels. Done so far: 16 partial sums (4x on the default target).

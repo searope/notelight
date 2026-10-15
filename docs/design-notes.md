@@ -50,22 +50,27 @@ tests can check the Rust output against a NumPy reference.
 ### Exhaustive search, not an ANN index
 
 Vector search scans every stored vector. A personal folder holds thousands to
-low hundreds of thousands of chunks, and at 100k chunks the full binary scan
-plus int8 rescoring takes about 1.3 ms. An approximate index (HNSW, IVF) would
+low hundreds of thousands of chunks, and at 100k chunks the full ternary scan
+plus int8 rescoring takes about 1.5 ms. An approximate index (HNSW, IVF) would
 add memory, build time and tuning knobs, and it can silently miss results.
 Exhaustive search is simpler and exact up to quantization.
 
 ### Two-stage vector search
 
-1. **Binary stage.** One bit per dimension, compared with XOR + popcount over
-   `u64` words: 48 bytes per 384-dim vector.
+1. **Ternary stage.** Each dimension is `-1`, `0` or `+1`: the sign bit plus a
+   mask bit for dimensions above 0.7 × the vector's mean absolute value. The
+   ternary dot product is two popcounts over `u64` words (agreements minus
+   disagreements among dimensions significant in both): 96 bytes per 384-dim
+   vector. Ignoring the near-zero dimensions makes the 200 candidates almost
+   exactly the ones exhaustive int8 would rank first. (Milestone 1 used sign
+   bits alone; see "Ternary is the default" below.)
 2. **Int8 stage.** Only the best 200 candidates are re-scored with int8 codes.
    The query stays `f32` ("asymmetric" scoring), which is more accurate than
    quantizing both sides.
 
-Candidate selection uses a histogram instead of a sort. Hamming distances are
-integers between 0 and `dim`, so counting them finds the cut-off in one pass
-with no comparisons.
+Candidate selection uses a histogram instead of a sort. Ternary distances
+(`dim` minus the ternary dot product) are integers between 0 and `2 * dim`, so
+counting them finds the cut-off in one pass with no comparisons.
 
 Full-precision `f32` vectors are not stored. The int8 codes keep ranking
 quality close to `f32` at a quarter of the size. Milestone 3 measures exactly
@@ -207,10 +212,10 @@ index code as `notelight search`:
 | `f32` | exact cosine similarity over float32 vectors, in NumPy: the ceiling for the quantized methods |
 | `int8` | int8 scores for every vector (Rust) |
 | `binary` | Hamming distance alone (Rust) |
-| `binary+int8` | 200 binary candidates re-scored with int8: the default |
-| `ternary+int8` | 200 ternary candidates re-scored with int8: experimental |
+| `binary+int8` | 200 binary candidates re-scored with int8 |
+| `ternary+int8` | 200 ternary candidates re-scored with int8: the default |
 | `bm25` | keyword search alone |
-| `hybrid` | BM25 and `binary+int8` fused with RRF: what `notelight search` returns |
+| `hybrid` | BM25 and the default vector search fused with RRF: what `notelight search` returns |
 
 Each BEIR document is indexed as one chunk, with its title as the heading
 path, so the index, the BM25 text and the embedded text are built exactly as
@@ -227,7 +232,28 @@ ternary search, and cached in a `OnceLock` for the reader's lifetime. That
 keeps it in Rust next to the binary stage (the browser build will want the
 same loop) without changing the index format or bumping `SCHEMA_VERSION`.
 Whether it should become the default is a question for the numbers; see
-[results.md](results.md).
+[results.md](results.md). It did, and the masks moved to disk; see the next
+section.
+
+### Ternary is the default, and its masks are stored (schema 2)
+
+On all three BEIR datasets `ternary+int8` matches exhaustive int8 nDCG@10 to
+three decimals, where `binary+int8` loses up to 0.010, for about 0.3 ms more
+per query at 57k documents. So it became the default for vector search and
+for the vector half of hybrid search.
+
+Deriving the masks on first use would have kept the format, but every
+`notelight search` opens a fresh reader, so each CLI query would pay one pass
+over all int8 codes (117 ms at 57k chunks). The masks are now written next to
+the sign bits instead: 48 more bytes per 384-dim vector (484 instead of 436,
+about 11% more vector data), no warm-up, and the masks are memory-mapped like
+everything else. The writer computes each mask from the int8 codes rather
+than the floats, so a stored mask is exactly what a reader could recompute,
+and the property tests check search against that recomputation. This changed
+the `vectors.bin` layout, so `SCHEMA_VERSION` went to 2; old indexes are
+rejected and rebuilt, which is always safe for a cache of your files.
+
+`binary+int8` stays available as a `VectorMode` for the evaluation.
 
 ### Datasets are pinned like the model
 

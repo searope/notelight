@@ -1,18 +1,17 @@
 //! Vector quantization primitives.
 //!
-//! Two encodings are stored for every embedding:
+//! Three encodings are stored for every embedding:
 //!
 //! - **Binary**: one bit per dimension (the sign). Comparing two codes is a
 //!   Hamming distance (XOR + popcount), which is cheap enough to scan every
-//!   vector for each query. It is used to pick candidates.
+//!   vector for each query.
+//! - **Ternary** (`-1`, `0` or `+1` per dimension): the binary code plus a
+//!   mask of "significant" dimensions (see [`ternary_mask`]). Comparing two
+//!   codes is [`ternary_dot`], two popcounts. It is used to pick candidates,
+//!   and picks better ones than binary codes alone.
 //! - **Int8**: each dimension scaled to `-127..=127` with one `f32` scale per
 //!   vector. It is about 4x smaller than `f32` and keeps ~99% of the ranking
-//!   quality. It is used to re-score the binary candidates.
-//!
-//! A third encoding, **ternary** (`-1`, `0` or `+1` per dimension), is an
-//! experimental alternative to binary for picking candidates. It is not
-//! stored: the sign is the binary code, and the "is it significant" mask is
-//! derived from the int8 codes when first needed. See [`ternary_mask`].
+//!   quality. It is used to re-score the candidates.
 
 /// Number of bytes needed to store a binary code of `dim` dimensions.
 #[must_use]

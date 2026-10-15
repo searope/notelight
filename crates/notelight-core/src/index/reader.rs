@@ -31,7 +31,8 @@ pub struct SearchOpts {
     pub k: usize,
     /// How many results each retriever (BM25, vectors) contributes to fusion.
     pub depth: usize,
-    /// Binary-stage candidates re-scored with int8 vectors.
+    /// Candidates from the ternary stage (see [`VectorMode`]) re-scored with
+    /// int8 vectors.
     pub candidates: usize,
     /// RRF constant; see [`crate::fuse`].
     pub rrf_k: f32,
@@ -205,7 +206,8 @@ impl IndexReader {
         self.bm25.search(query, k)
     }
 
-    /// Vector search: the `k` best `(id, cosine)` pairs.
+    /// Vector search in the default [`VectorMode`] (ternary candidates,
+    /// int8 rescoring): the `k` best `(id, cosine)` pairs.
     ///
     /// # Errors
     /// Fails if the index is keyword-only or the query has the wrong dimension.

@@ -4,8 +4,9 @@
 //! full Hamming scan takes milliseconds, and exhaustive search never silently
 //! misses a document the way a mis-tuned ANN index can.
 //!
-//! 1. **Candidates**: Hamming distance between the query's binary code and
-//!    every stored code; keep the `candidates` closest.
+//! 1. **Candidates**: the ternary dot product between the query's ternary
+//!    code and every stored one (two bit planes: sign and "significant"
+//!    mask, see [`crate::quant::ternary_mask`]); keep the `candidates` best.
 //! 2. **Rescore**: for those candidates only, compute `query · v` using the
 //!    int8 codes and per-vector scale; return the best `k`.
 //!
@@ -13,23 +14,21 @@
 //! approximate cosine similarity.
 //!
 //! [`VectorMode`] selects other strategies, which the evaluation harness
-//! compares: int8 over every vector, binary codes alone, or ternary codes
-//! instead of binary ones for the candidate stage. Ternary masks are not
-//! stored; they are derived from the int8 codes on first use (see
-//! [`crate::quant::ternary_mask`]).
+//! compares: int8 over every vector, binary codes alone, or binary codes
+//! instead of ternary ones for the candidate stage.
 //!
 //! File layout (little-endian, header described in `docs/index-format.md`):
 //!
 //! ```text
-//! header   magic "NLVC", version 1, a = n, b = dim
-//! binary   [u8; n * ceil(dim/8)]  padded to 4 bytes
+//! header   magic "NLVC", version 2, a = n, b = dim
+//! binary   [u8; n * ceil(dim/8)]  sign bits, padded to 4 bytes
+//! masks    [u8; n * ceil(dim/8)]  ternary masks, padded to 4 bytes
 //! scales   [f32; n]
 //! int8     [i8; n * dim]
 //! ```
 
 use std::fmt;
 use std::str::FromStr;
-use std::sync::OnceLock;
 
 use crate::bin_format::{self, HEADER_LEN, f32_at, to_u32};
 use crate::error::{Error, Result};
@@ -40,16 +39,17 @@ use crate::quant::{
 use crate::topk::{smallest_k_by_histogram, top_k};
 
 const MAGIC: [u8; 4] = *b"NLVC";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 /// How [`Vectors::search_with`] finds and scores results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum VectorMode {
-    /// Binary candidates re-scored with int8 codes. The default, and what
-    /// hybrid search uses.
-    #[default]
+    /// Binary candidates re-scored with int8 codes.
     BinaryInt8,
-    /// Ternary candidates re-scored with int8 codes. Experimental.
+    /// Ternary candidates re-scored with int8 codes. The default, and what
+    /// hybrid search uses: on BEIR it matches exhaustive int8 quality, where
+    /// binary candidates lose up to 0.01 nDCG@10 (see `docs/results.md`).
+    #[default]
     TernaryInt8,
     /// Rank by Hamming distance alone. Scores are `1 - 2 * distance / dim`,
     /// the fraction of agreeing signs mapped to `-1..=1`.
@@ -107,6 +107,7 @@ impl FromStr for VectorMode {
 pub struct VectorBuilder {
     dim: usize,
     binary: Vec<u8>,
+    masks: Vec<u8>,
     scales: Vec<f32>,
     int8: Vec<i8>,
 }
@@ -122,6 +123,7 @@ impl VectorBuilder {
         Self {
             dim,
             binary: Vec::new(),
+            masks: Vec::new(),
             scales: Vec::new(),
             int8: Vec::new(),
         }
@@ -145,6 +147,10 @@ impl VectorBuilder {
         let v = l2_normalized(v);
         self.binary.extend(quantize_binary(&v));
         let (codes, scale) = quantize_int8(&v);
+        // The mask comes from the int8 codes, not the floats, so it matches
+        // what a reader could recompute from the stored codes alone.
+        let as_f32: Vec<f32> = codes.iter().map(|&c| f32::from(c)).collect();
+        self.masks.extend(ternary_mask(&as_f32));
         self.int8.extend(codes);
         self.scales.push(scale);
         Ok(id)
@@ -172,6 +178,8 @@ impl VectorBuilder {
         let mut w = bin_format::Writer::with_header(MAGIC, VERSION, n, dim);
         w.bytes(&self.binary);
         w.pad4();
+        w.bytes(&self.masks);
+        w.pad4();
         for &s in &self.scales {
             w.f32(s);
         }
@@ -193,11 +201,9 @@ pub struct Vectors<B> {
     n: usize,
     dim: usize,
     code_len: usize,
+    masks_at: usize,
     scales_at: usize,
     int8_at: usize,
-    /// Ternary masks for every vector, `n * code_len` bytes, built on first
-    /// use by [`VectorMode::TernaryInt8`].
-    ternary_masks: OnceLock<Vec<u8>>,
 }
 
 impl<B: AsRef<[u8]>> Vectors<B> {
@@ -217,20 +223,23 @@ impl<B: AsRef<[u8]>> Vectors<B> {
         // exceeds even u64, and `usize` is only 32 bits on WebAssembly. Once
         // the total matches the real length, every offset fits in `usize`.
         let (n64, dim64, code64) = (n as u128, dim as u128, code_len as u128);
-        let scales_at = HEADER_LEN as u128 + (n64 * code64).div_ceil(4) * 4;
+        let plane = (n64 * code64).div_ceil(4) * 4;
+        let masks_at = HEADER_LEN as u128 + plane;
+        let scales_at = masks_at + plane;
         let int8_at = scales_at + 4 * n64;
         if data.len() as u128 != int8_at + n64 * dim64 {
             return Err(Error::format("vectors: size does not match header"));
         }
-        let (scales_at, int8_at) = (scales_at as usize, int8_at as usize);
+        let (masks_at, scales_at, int8_at) =
+            (masks_at as usize, scales_at as usize, int8_at as usize);
         Ok(Self {
             bytes,
             n,
             dim,
             code_len,
+            masks_at,
             scales_at,
             int8_at,
-            ternary_masks: OnceLock::new(),
         })
     }
 
@@ -254,6 +263,12 @@ impl<B: AsRef<[u8]>> Vectors<B> {
 
     fn code(&self, i: usize) -> &[u8] {
         let start = HEADER_LEN + i * self.code_len;
+        &self.bytes.as_ref()[start..start + self.code_len]
+    }
+
+    /// Ternary mask of vector `i` (its sign plane is [`Self::code`]).
+    fn mask(&self, i: usize) -> &[u8] {
+        let start = self.masks_at + i * self.code_len;
         &self.bytes.as_ref()[start..start + self.code_len]
     }
 
@@ -311,35 +326,14 @@ impl<B: AsRef<[u8]>> Vectors<B> {
             .collect()
     }
 
-    /// Ternary masks of every stored vector, derived from the int8 codes the
-    /// first time they are needed and kept for the reader's lifetime.
-    ///
-    /// `OnceLock` makes this safe to call from several threads at once: one
-    /// of them builds the masks and the others wait for it.
-    fn ternary_masks(&self) -> &[u8] {
-        self.ternary_masks.get_or_init(|| {
-            let mut masks = Vec::with_capacity(self.n * self.code_len);
-            let mut scratch = vec![0.0_f32; self.dim];
-            for i in 0..self.n {
-                for (x, &c) in scratch.iter_mut().zip(self.int8_codes(i)) {
-                    *x = f32::from(i8::from_le_bytes([c]));
-                }
-                masks.extend(ternary_mask(&scratch));
-            }
-            masks
-        })
-    }
-
     /// Ternary "distances" from `query` to every stored vector: `dim` minus
     /// the ternary dot product, so `0` is the best match and every value fits
     /// the histogram selection used for Hamming distances.
     fn ternary_scan(&self, query: &[f32], dim: i64) -> Vec<u16> {
         let (q_sign, q_mask) = (quantize_binary(query), ternary_mask(query));
-        let masks = self.ternary_masks();
         (0..self.n)
             .map(|i| {
-                let mask = &masks[i * self.code_len..(i + 1) * self.code_len];
-                let dot = ternary_dot(&q_sign, &q_mask, self.code(i), mask);
+                let dot = ternary_dot(&q_sign, &q_mask, self.code(i), self.mask(i));
                 // dot is in -dim..=dim, so this is in 0..=2 * dim.
                 u16::try_from(dim - dot).unwrap_or(u16::MAX)
             })
@@ -356,23 +350,23 @@ impl<B: AsRef<[u8]>> Vectors<B> {
         )
     }
 
-    /// Two-stage search: binary candidates, then int8 rescoring.
+    /// Two-stage search in the default [`VectorMode`]: ternary candidates,
+    /// then int8 rescoring.
     ///
     /// Returns up to `k` `(id, score)` pairs, best first. `candidates` is
     /// raised to at least `k`.
     ///
     /// # Errors
-    /// Fails if `query` has the wrong dimension.
+    /// As [`Self::search_with`].
     pub fn search(&self, query: &[f32], k: usize, candidates: usize) -> Result<Vec<(u32, f32)>> {
-        self.search_with(query, k, candidates, VectorMode::BinaryInt8)
+        self.search_with(query, k, candidates, VectorMode::default())
     }
 
     /// Search with an explicit [`VectorMode`].
     ///
     /// Returns up to `k` `(id, score)` pairs, best first, ties broken by lower
     /// id. `candidates` applies to the two-stage modes and is raised to at
-    /// least `k`; the other modes ignore it. The first ternary search builds
-    /// the ternary masks (one pass over the int8 codes).
+    /// least `k`; the other modes ignore it.
     ///
     /// # Errors
     /// Fails if `query` has the wrong dimension, is all zeros or contains
@@ -539,7 +533,7 @@ mod tests {
         for mode in VectorMode::ALL {
             assert_eq!(mode.to_string().parse::<VectorMode>().unwrap(), mode);
         }
-        assert_eq!(VectorMode::default(), VectorMode::BinaryInt8);
+        assert_eq!(VectorMode::default(), VectorMode::TernaryInt8);
         assert!("hnsw".parse::<VectorMode>().is_err());
     }
 
@@ -559,9 +553,35 @@ mod tests {
     #[test]
     fn rejects_overflowing_headers() {
         let mut bytes = b"NLVC".to_vec();
-        bytes.extend_from_slice(&[1, 0, 0, 0]);
+        bytes.extend_from_slice(&VERSION.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0]);
         bytes.extend_from_slice(&u32::MAX.to_le_bytes());
         bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(Vectors::from_bytes(bytes).is_err());
+    }
+
+    #[test]
+    fn stores_ternary_masks_derived_from_int8_codes() {
+        // 3 vectors of 12 dimensions: 2-byte codes, so each bit plane is 6
+        // bytes padded to 8.
+        let vs = vecs(3, 12, 6);
+        let idx = build(&vs);
+        assert_eq!(
+            idx.bytes.len(),
+            HEADER_LEN + 8 + 8 + 4 * 3 + 3 * 12,
+            "header, signs, masks, scales, int8"
+        );
+        for (i, v) in vs.iter().enumerate() {
+            let (codes, _) = quantize_int8(&l2_normalized(v));
+            let as_f32: Vec<f32> = codes.iter().map(|&c| f32::from(c)).collect();
+            assert_eq!(idx.mask(i), ternary_mask(&as_f32).as_slice());
+        }
+    }
+
+    #[test]
+    fn rejects_version_1_files() {
+        let mut bytes = VectorBuilder::new(8).finish().unwrap();
+        bytes[4..6].copy_from_slice(&1u16.to_le_bytes());
         assert!(Vectors::from_bytes(bytes).is_err());
     }
 

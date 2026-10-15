@@ -287,7 +287,7 @@ impl PyIndexReader {
 
     /// Vector search only: the `k` best `(id, cosine)` pairs. `mode` is one of
     /// `VECTOR_MODES`; the default is what hybrid search uses.
-    #[pyo3(signature = (vector, k, candidates = 200, mode = "binary+int8"))]
+    #[pyo3(signature = (vector, k, candidates = 200, mode = "ternary+int8"))]
     fn search_vector(
         &self,
         py: Python<'_>,

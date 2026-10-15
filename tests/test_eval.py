@@ -261,6 +261,13 @@ def test_numpy_f32_is_exact_cosine(tmp_path: Path) -> None:
     assert hits[0][0] == 5 and hits[0][1] == pytest.approx(1.0, abs=1e-6)
 
 
+def test_search_vector_defaults_to_ternary(tmp_path: Path) -> None:
+    reader, vectors = _random_index(tmp_path)
+    q = vectors[3] + 0.5 * vectors[4]
+    default = reader.search_vector(q, 10)
+    assert default == reader.search_vector(q, 10, 200, "ternary+int8")
+
+
 def test_search_vector_rejects_unknown_mode(tmp_path: Path) -> None:
     reader, vectors = _random_index(tmp_path, n=5)
     with pytest.raises(ValueError, match="unknown vector mode"):

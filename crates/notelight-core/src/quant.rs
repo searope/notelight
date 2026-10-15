@@ -88,11 +88,47 @@ pub fn quantize_int8(v: &[f32]) -> (Vec<i8>, f32) {
 #[must_use]
 pub fn dot_f32_i8(query: &[f32], codes: &[i8]) -> f32 {
     assert_eq!(query.len(), codes.len(), "dimension mismatch");
-    query
+    dot_in_lanes(query, codes, f32::from)
+}
+
+/// Number of independent partial sums in [`dot_in_lanes`].
+const LANES: usize = 16;
+
+/// `sum(query[i] * to_f32(codes[i]))`, written so the compiler can vectorize
+/// it.
+///
+/// A plain `.sum()` has one accumulator, and every addition waits for the
+/// previous one. The compiler may not split it into SIMD lanes on its own,
+/// because float addition is not associative and that would change the
+/// result. Here the split is explicit: `LANES` partial sums, one per position
+/// in each `LANES`-wide chunk, added together at the end. Each chunk's
+/// multiply-adds are independent of each other, so they become a few SIMD
+/// instructions.
+///
+/// The result can differ from a sequential sum in the last bits, but it is
+/// deterministic: the order of additions depends only on the length.
+/// `to_f32` lets the same loop read `i8` codes or the raw bytes of a stored
+/// index. Callers pass slices of the same length.
+///
+/// 16 lanes measured best on x86-64 (see `docs/learning/m3-rust-walkthrough.md`):
+/// 8 leaves the SIMD units waiting on each other, 32 runs out of registers.
+#[inline]
+pub(crate) fn dot_in_lanes<C: Copy>(query: &[f32], codes: &[C], to_f32: impl Fn(C) -> f32) -> f32 {
+    debug_assert_eq!(query.len(), codes.len());
+    let (q_chunks, q_tail) = query.as_chunks::<LANES>();
+    let (c_chunks, c_tail) = codes.as_chunks::<LANES>();
+    let mut acc = [0.0_f32; LANES];
+    for (q, c) in q_chunks.iter().zip(c_chunks) {
+        for ((a, &x), &y) in acc.iter_mut().zip(q).zip(c) {
+            *a += x * to_f32(y);
+        }
+    }
+    let tail: f32 = q_tail
         .iter()
-        .zip(codes)
-        .map(|(&q, &c)| q * f32::from(c))
-        .sum()
+        .zip(c_tail)
+        .map(|(&x, &y)| x * to_f32(y))
+        .sum();
+    acc.iter().sum::<f32>() + tail
 }
 
 /// Fraction of a vector's mean absolute value at or below which a dimension

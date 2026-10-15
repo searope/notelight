@@ -111,19 +111,22 @@ ML tooling is.
 
 ## Performance (Rust core)
 
-Measured with `cargo bench -p notelight-core` on synthetic data, using a
-single core of a cloud VM. These are indicative numbers, not a tuned benchmark:
+Measured with `cargo bench -p notelight-core` on synthetic data, on one
+thread of an Intel Core i9-10900K (Windows 11, default x86-64 target, so no
+AVX). These are indicative numbers, not a tuned benchmark:
 
 | Operation | Size | Time |
 |---|---|---|
-| Vector search, binary candidates + int8 rescore (k=10, 200 candidates) | 100k × 384-dim | 1.3 ms |
-| Same, exhaustive int8 scan (reference) | 100k × 384-dim | 45 ms |
-| BM25 query, 3 terms | 100k chunks | 0.2 ms |
-| Markdown chunking | 1 MB document | 6 ms (≈165 MiB/s) |
+| Vector search, binary candidates + int8 rescore (k=10, 200 candidates) | 100k × 384-dim | 0.8 ms |
+| Same, exhaustive int8 scan (reference) | 100k × 384-dim | 7.9 ms |
+| BM25 query, 3 terms | 100k chunks | 0.16 ms |
+| Markdown chunking | 1 MB document | 7.4 ms (≈130 MiB/s) |
 
-The two-stage search is about 33× faster than scanning every int8 vector,
+The two-stage search is about 10× faster than scanning every int8 vector,
 because the binary pass compares 48 bytes per vector with `popcount`, and only
-200 candidates are re-scored.
+200 candidates are re-scored. The int8 dot product keeps 16 partial sums so
+the compiler can use SIMD; see
+[the note on vectorizing it](docs/learning/m3-int8-dot-vectorization.md).
 
 ## Retrieval quality
 
@@ -147,7 +150,9 @@ ternary candidates close the remaining gap at about 1.5x the candidate-scan
 cost. Hybrid fusion helps where keywords are strong (NFCorpus) and hurts
 where they are weak (FiQA). Against a NumPy implementation of the same
 searches, the Rust core returns identical top-10 lists; its two-stage search
-is 4 to 11x faster, while NumPy's BLAS wins the exhaustive int8 scan by 5x.
+is 7 to 13x faster, while NumPy's multi-threaded BLAS still wins the
+exhaustive int8 scan by 1.3 to 1.6x (it was 5x before the int8 dot product
+was vectorized).
 Details and caveats are in [docs/results.md](docs/results.md).
 
 ```powershell
@@ -192,7 +197,8 @@ After changing Rust code, rebuild with `maturin develop --release`.
   [milestone 0](docs/learning/m0-rust-walkthrough.md),
   [milestone 1](docs/learning/m1-rust-walkthrough.md),
   [milestone 2](docs/learning/m2-rust-walkthrough.md),
-  [milestone 3](docs/learning/m3-rust-walkthrough.md)
+  [milestone 3](docs/learning/m3-rust-walkthrough.md) (plus
+  [vectorizing the int8 dot product](docs/learning/m3-int8-dot-vectorization.md))
 
 ## License
 

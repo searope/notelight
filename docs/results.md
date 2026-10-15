@@ -63,21 +63,24 @@ What the table says:
 
 Median milliseconds per query, measured from Python around one call (so each
 includes a few microseconds of binding overhead), excluding query embedding.
-`f32` is NumPy; every other method is the Rust core on one thread.
+`f32` is NumPy; every other method is the Rust core on one thread. The
+`int8` and `binary+int8` rows were re-measured after the int8 dot product was
+vectorized (see [Rust vs NumPy](#rust-vs-numpy)); the others are from the
+original run.
 
 | Method | SciFact | NFCorpus | FiQA |
 |---|---:|---:|---:|
 | `f32` (NumPy) | 0.23 | 0.20 | 3.27 |
-| `int8` | 1.65 | 1.15 | 18.7 |
+| `int8` | 0.37 | 0.26 | 4.60 |
 | `binary` | 0.06 | 0.04 | 0.54 |
-| `binary+int8` | 0.13 | 0.11 | 0.63 |
+| `binary+int8` | 0.07 | 0.06 | 0.54 |
 | `ternary+int8` | 0.16 | 0.13 | 1.01 |
 | `bm25` | 0.04 | 0.01 | 0.26 |
 | `hybrid` | 0.20 | 0.14 | 0.97 |
 
 Embedding the query with bge-small takes about 5 ms on this CPU, more than
-any search here except exhaustive int8 on FiQA, so for a personal folder the
-default search is never the bottleneck.
+any search here, so for a personal folder the search is never the
+bottleneck.
 
 The first `ternary+int8` search on an opened index also derives the ternary
 masks from the int8 codes: 117 ms once for FiQA, excluded above (the harness
@@ -90,31 +93,34 @@ The same three searches, implemented in NumPy the way a NumPy user would
 
 | Dataset | Search | Rust ms | NumPy ms | NumPy / Rust | Top-10 agreement |
 |---|---|---:|---:|---:|---:|
-| SciFact | `int8` | 1.67 | 0.34 | 0.2x | 1.000 |
-| SciFact | `binary` | 0.06 | 0.59 | 10.0x | 1.000 |
-| SciFact | `binary+int8` | 0.15 | 0.68 | 4.6x | 1.000 |
-| NFCorpus | `int8` | 1.15 | 0.27 | 0.2x | 1.000 |
-| NFCorpus | `binary` | 0.04 | 0.43 | 10.5x | 1.000 |
-| NFCorpus | `binary+int8` | 0.12 | 0.52 | 4.2x | 1.000 |
-| FiQA | `int8` | 18.6 | 3.58 | 0.2x | 1.000 |
-| FiQA | `binary` | 0.63 | 7.64 | 12.1x | 1.000 |
-| FiQA | `binary+int8` | 0.72 | 7.69 | 10.6x | 1.000 |
+| SciFact | `int8` | 0.41 | 0.26 | 0.6x | 1.000 |
+| SciFact | `binary` | 0.05 | 0.60 | 12.0x | 1.000 |
+| SciFact | `binary+int8` | 0.09 | 0.68 | 7.3x | 1.000 |
+| NFCorpus | `int8` | 0.27 | 0.20 | 0.7x | 1.000 |
+| NFCorpus | `binary` | 0.04 | 0.43 | 11.7x | 1.000 |
+| NFCorpus | `binary+int8` | 0.07 | 0.51 | 7.0x | 1.000 |
+| FiQA | `int8` | 4.61 | 3.55 | 0.8x | 1.000 |
+| FiQA | `binary` | 0.53 | 7.58 | 14.2x | 1.000 |
+| FiQA | `binary+int8` | 0.59 | 7.47 | 12.8x | 1.000 |
 
 - **Agreement is 1.000 everywhere**: for every query, both implementations
   return the same top 10. That cross-checks the Rust bit packing, int8
   rounding and tie-breaking against an independent implementation.
-- **The two-stage search is 4 to 11x faster in Rust.** XOR + popcount over
+- **The two-stage search is 7 to 13x faster in Rust.** XOR + popcount over
   packed `u64` words and a histogram cut-off beat NumPy's
   `bitwise_xor` + `bitwise_count` + `argpartition`, which allocate a full-size
   temporary at every step.
-- **The exhaustive int8 scan is 5x slower in Rust.** This one Rust loses.
-  NumPy keeps the codes dequantized as float32 (4x the memory) and hands the
-  product to a multi-threaded, SIMD BLAS kernel. The Rust `int8_dot` is a
-  scalar loop with one `f32` accumulator, which the compiler may not
-  vectorize because that would change the order of the additions. The
-  default search only re-scores 200 candidates, so this does not affect
-  `notelight search`, but it is a clear target: several partial sums (or
-  integer accumulation of a quantized query) would let the loop vectorize.
+- **The exhaustive int8 scan is still 1.3 to 1.6x slower in Rust.** NumPy
+  keeps the codes dequantized as float32 (4x the memory) and hands the
+  product to a multi-threaded, SIMD BLAS kernel. The first version of the
+  Rust `int8_dot` was a scalar loop with one `f32` accumulator, which the
+  compiler may not vectorize because that would change the order of the
+  additions, and it lost by 5x (18.6 ms vs 3.58 ms on FiQA). Keeping 16
+  partial sums lets it use SIMD on one thread and cut the scan 4x, to
+  4.6 ms; it also speeds up the rescoring in every two-stage search. See
+  [the learning note](learning/m3-int8-dot-vectorization.md). Building for
+  the local CPU (AVX2) would roughly halve it again, but wheels have to run
+  on any x86-64.
 
 ## What changes next
 
@@ -123,7 +129,9 @@ The same three searches, implemented in NumPy the way a NumPy user would
   storing the masks (48 more bytes per 384-dim vector, about 11% more
   vector data, and a `SCHEMA_VERSION` bump) or keeping the one-time
   derivation on first search (117 ms at FiQA scale, once per opened index).
-- **A vectorized `int8_dot`**, which also speeds up the rescoring step.
+- **AVX2 for `int8_dot` via runtime feature detection**, which would close
+  the remaining gap to NumPy on exhaustive scans without giving up portable
+  wheels. Done so far: 16 partial sums (4x on the default target).
 
 ## Reproducing
 

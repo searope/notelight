@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use notelight_core::bm25::{Bm25, Bm25Builder, Bm25Params};
 use notelight_core::chunk::{ChunkOpts, chunk_text};
 use notelight_core::quant::{
-    TERNARY_THRESHOLD, hamming, l2_normalized, quantize_binary, quantize_int8, ternary_dot,
-    ternary_mask,
+    TERNARY_THRESHOLD, dot_f32_i8, hamming, l2_normalized, quantize_binary, quantize_int8,
+    ternary_dot, ternary_mask,
 };
 use notelight_core::tokenize::tokenize;
 use notelight_core::topk::{smallest_k_by_histogram, top_k};
@@ -94,6 +94,21 @@ proptest! {
         for (x, c) in v.iter().zip(&codes) {
             prop_assert!((x - f32::from(*c) * scale).abs() <= scale * 0.5 + 1e-6);
         }
+    }
+
+    #[test]
+    fn dot_f32_i8_matches_f64_reference(
+        pairs in prop::collection::vec((-1.0f32..1.0, any::<i8>()), 0..300),
+    ) {
+        let (q, c): (Vec<f32>, Vec<i8>) = pairs.into_iter().unzip();
+        // Reference: one sequential sum in f64, which has no rounding error
+        // worth mentioning at these sizes.
+        let reference: f64 = q.iter().zip(&c).map(|(&x, &y)| f64::from(x) * f64::from(y)).sum();
+        let magnitude: f64 = q.iter().zip(&c).map(|(&x, &y)| (f64::from(x) * f64::from(y)).abs()).sum();
+        // Any order of f32 additions is within n * eps * sum(|terms|) of it.
+        let bound = q.len() as f64 * f64::from(f32::EPSILON) * magnitude + 1e-6;
+        let got = f64::from(dot_f32_i8(&q, &c));
+        prop_assert!((got - reference).abs() <= bound, "{got} vs {reference}");
     }
 
     #[test]

@@ -219,8 +219,9 @@ Two results are directly about the Rust in this guide:
   matrix-vector product. `int8_dot` is a scalar loop with a single `f32`
   accumulator, which the compiler is not allowed to vectorize because that
   would reorder the additions. The two-stage search avoids the problem by
-  rescoring only 200 candidates; making the scan itself faster is a separate
-  piece of work.
+  rescoring only 200 candidates. A follow-up made the scan itself 4x faster
+  with 16 partial sums; see
+  [Making `int8_dot` vectorize](m3-int8-dot-vectorization.md).
 
 ## Exercises
 

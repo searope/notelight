@@ -34,8 +34,8 @@ use std::sync::OnceLock;
 use crate::bin_format::{self, HEADER_LEN, f32_at, to_u32};
 use crate::error::{Error, Result};
 use crate::quant::{
-    binary_code_len, hamming, l2_normalized, quantize_binary, quantize_int8, ternary_dot,
-    ternary_mask,
+    binary_code_len, dot_in_lanes, hamming, l2_normalized, quantize_binary, quantize_int8,
+    ternary_dot, ternary_mask,
 };
 use crate::topk::{smallest_k_by_histogram, top_k};
 
@@ -269,11 +269,7 @@ impl<B: AsRef<[u8]>> Vectors<B> {
         let codes = self.int8_codes(i);
         // Codes are stored as raw bytes; `i8::from_le_bytes` reinterprets each
         // one without `unsafe`, and compiles to the same sign-extending load.
-        let dot: f32 = query
-            .iter()
-            .zip(codes)
-            .map(|(&q, &c)| q * f32::from(i8::from_le_bytes([c])))
-            .sum();
+        let dot = dot_in_lanes(query, codes, |c| f32::from(i8::from_le_bytes([c])));
         dot * f32_at(data, self.scales_at + 4 * i)
     }
 

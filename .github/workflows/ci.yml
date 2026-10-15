@@ -20,10 +20,10 @@ jobs:
     name: Rust (fmt, clippy, test)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # Lints are pinned to a known toolchain so a new stable release cannot
       # break CI overnight; bump deliberately and fix any new lints in one PR.
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -41,9 +41,9 @@ jobs:
     name: Rust MSRV (1.88)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # Keep in sync with `rust-version` in Cargo.toml and the README badge.
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-targets
 
@@ -51,7 +51,7 @@ jobs:
     name: Rust tests on Windows (mmap + generation swap)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p notelight-core
@@ -65,10 +65,10 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python: ["3.10", "3.13"]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - name: Build and install (editable, builds the Rust extension)

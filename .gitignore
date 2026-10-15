@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.so
 *.pyd
+*.pdb
 .venv/
 .pytest_cache/
 .mypy_cache/

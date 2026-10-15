@@ -333,6 +333,7 @@ dependencies = [
  "notelight-core",
  "numpy",
  "pyo3",
+ "serde_json",
 ]
 
 [[package]]

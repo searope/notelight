@@ -22,7 +22,12 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
+  "filelock>=3.13",
   "numpy>=1.26",
+  "onnxruntime>=1.19",
+  "pathspec>=0.12",
+  "platformdirs>=4",
+  "tokenizers>=0.20",
   "typer>=0.12",
 ]
 
@@ -58,6 +63,10 @@ python_version = "3.10"
 strict = true
 packages = ["notelight"]
 mypy_path = "python"
+
+[[tool.mypy.overrides]]
+module = ["onnxruntime", "onnxruntime.*"]
+ignore_missing_imports = true
 
 [tool.ruff.lint.isort]
 known-first-party = ["notelight"]

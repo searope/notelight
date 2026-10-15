@@ -118,3 +118,78 @@ reinterpreting byte slices as `&[u32]`. That avoids alignment requirements and
 crate is the memory-map call itself, with its safety argument documented next
 to it. Each file is fully validated when it is opened, so query paths can index
 without repeating checks.
+
+## Milestone 2 decisions
+
+### Full rebuild per sync, with caches in front
+
+Every sync writes a complete new generation (see above) instead of patching
+the index. The costly step, embedding, is cached, so a full rebuild only costs
+the time to write files. The indexer keeps three caches in `cache.sqlite` next
+to the index:
+
+| Table | Key | Saves |
+|---|---|---|
+| `files` | relative path → size, mtime, content key | reading and hashing files that did not change |
+| `chunks` | `sha256(file bytes)` + chunking mode | re-chunking known content |
+| `embeddings` | `sha256(model_id + "\n" + embedded text)` | re-embedding known chunks |
+
+The embedding key comes from the exact text sent to the model (heading path
+plus chunk text) and the model id. A renamed, moved or copied file reuses its
+vectors, a file edited in one section re-embeds only the chunks that changed,
+and switching models can never return stale vectors. After a successful commit,
+rows no current file refers to are deleted, so the cache cannot grow without
+bound.
+
+A file whose size and mtime match is trusted without being read. When they
+differ but the content hash matches (a `touch`, or a checkout that rewrites
+files), nothing is re-chunked or re-embedded, and the stored stat is refreshed.
+When nothing changed at all, no generation is written.
+
+SQLite was chosen over a directory of `.npy` files because the cache needs
+atomic batch updates, key lookups, and garbage collection with a `NOT IN`
+query. All three are one statement each, from the standard library.
+
+### One writer, enforced with a lock file
+
+The core assumes a single writer: `commit` sweeps up leftovers from earlier
+failed commits, which would be unsafe while another commit is running. The
+Python layer enforces this with `filelock` on `<index dir>/lock`. The lock
+uses OS file locks (`fcntl`/`msvcrt`) that are released when a process dies,
+so a crash cannot leave a stale lock. A second `notelight index` waits up to 10
+seconds, then fails with `IndexBusyError`. Readers never take the lock: they
+open whichever generation is live and keep using it.
+
+### Indexes live outside the indexed folder
+
+Indexes are stored in the user data directory, keyed by a hash of the folder's
+absolute path (`os.path.normcase` first, so `C:\Notes` and `c:\notes` match on
+Windows). This keeps notelight out of synced folders (Dropbox, OneDrive, git),
+and it lets you index read-only folders. `notelight status` lists every index
+and its source folder. `NOTELIGHT_HOME` moves everything elsewhere.
+
+### The embedder is part of the index's identity
+
+The manifest records the embedder's id, for example
+`BAAI/bge-small-en-v1.5@5c38ec7c405e`. Searching with a different embedder
+raises `EmbedderMismatchError` instead of returning plausible-looking nonsense.
+The CLI reads the id from the manifest and loads the matching embedder, so
+`notelight search` needs no flags. BM25-only search (`--embedder none`) is
+always allowed.
+
+### Pinned model files
+
+bge-small is downloaded from one fixed Hugging Face revision. Each file's
+SHA-256 is checked before the file is moved into the cache, and a mismatch
+deletes the download. Cached files are checked by size on load, so startup
+does not hash 133 MB. `--offline` (and `NOTELIGHT_MODEL_CACHE` for a shared
+cache) cover machines without network access. The model follows its
+reference recipe: CLS pooling, L2 normalization, and the bge query instruction
+prefix on queries only.
+
+### A fake embedder for tests
+
+The pipeline depends on an `Embedder` protocol, not on ONNX. Tests use
+`HashingEmbedder`, a deterministic feature-hashing bag of words, which
+needs no download, network or randomness. A test for the real model runs when
+`NOTELIGHT_MODEL_TESTS=1` is set.

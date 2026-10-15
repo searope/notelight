@@ -30,7 +30,8 @@ crates/notelight-core/   pure Rust engine, no Python/ML/async deps (WASM-portabl
   tests/                 integration (index.rs) and proptest suites (properties.rs)
   benches/search.rs      criterion benchmarks (numbers quoted in README)
 crates/notelight-py/     thin PyO3 bindings -> python module notelight._core
-python/notelight/        Python package (CLI via Typer; M2 adds embedder/indexer)
+crates/notelight-py/src/ lib.rs, errors.rs (core Error -> Python exceptions), chunking.rs, index.rs
+python/notelight/        Python package: embed.py, ingest.py, indexer.py, search.py, paths.py, cli.py
 tests/                   pytest
 docs/                    design-notes.md, index-format.md (spec), learning/
 ```
@@ -77,39 +78,22 @@ C++, x64/x86 build tools, Windows SDK).
 |---|---|---|
 | 0 | Scaffold, PyO3, CI on 3 OSes | done |
 | 1 | Rust core: chunking, BM25, quantized search, RRF, index format | done (independently reviewed; 8 findings fixed) |
-| 2 | Python package: bindings, embedder, incremental indexer, CLI | **next** |
-| 3 | Eval: BEIR (SciFact, NFCorpus, FiQA) recall@10/nDCG@10 for f32, int8, binary, binary+rescore, ternary+rescore, BM25, hybrid; Rust vs NumPy baseline | |
+| 2 | Python package: bindings, embedder, incremental indexer, CLI | done |
+| 3 | Eval: BEIR (SciFact, NFCorpus, FiQA) recall@10/nDCG@10 for f32, int8, binary, binary+rescore, ternary+rescore, BM25, hybrid; Rust vs NumPy baseline | **next** |
 | 4 | MCP server (official Python SDK, stdio): search, read_context, list_sources, index_status; demo GIF | |
 | 5 | Localhost web UI (FastAPI + one page), PDF/DOCX extras, wheels via maturin-action, PyPI | |
 | v2 | Same core compiled to wasm32 + TypeScript browser app | |
 
-## Milestone 2 plan
+## Milestone 2 notes (for whoever picks up M3)
 
-1. **Bindings** (`crates/notelight-py`): expose `chunk_text(text, max_chars, markdown)`,
-   `IndexWriter(dim, embedder, metadata).add(record, embedding: np.ndarray | None)`
-   and `.commit(root)`, and `IndexReader.open(root)` with `.search(text, vec, k, ...)`,
-   `.chunk(id)`, `.manifest`. Map `notelight_core::Error` variants to Python
-   exceptions (`SchemaError` means "rebuild the index"). Release the GIL in
-   commit and search. Update `_core.pyi`.
-2. **Embedder** (`python/notelight/embed.py`): ONNX Runtime plus HF `tokenizers`,
-   default `BAAI/bge-small-en-v1.5` (384-dim, MIT). Pin the revision and
-   SHA-256, download once into a platformdirs cache, and add an `--offline`
-   flag. bge uses CLS pooling plus L2-normalize, and queries get the bge query
-   instruction prefix. Use a `Protocol` so tests use a deterministic fake
-   embedder (no network in tests).
-3. **Ingest**: walk a folder, skip hidden, VCS and build dirs plus anything in
-   `.notelightignore`. Read `.md` and `.txt` as UTF-8, with a fallback and
-   skip-on-binary. Use relative `/` paths.
-4. **Indexer**: per-file content hash, and an embedding cache keyed by
-   `sha256(model_id + chunk_text)` (SQLite in the index dir), so re-indexing
-   embeds only changed chunks. Each sync writes one new generation through the
-   core writer. Use a lock file (`filelock`) for the single-writer rule. Store
-   indexes in the user data dir, keyed by a hash of the folder path, and refuse
-   to search with a different embedder than the manifest's.
-5. **CLI**: `notelight index <folder>`, `search "<query>" [--k] [--json]`,
-   `status`. Show `path:line_start-line_end`, the heading path and a snippet.
-6. **Tests**: pytest end-to-end on a fixture folder with the fake embedder,
-   covering incremental re-index, the embedder-mismatch error, and Windows
-   path handling.
-7. **Docs**: README usage section, design notes for the cache and lock, and
-   `docs/learning/m2-rust-walkthrough.md` (PyO3 classes, error mapping, GIL).
+- Design decisions (caches, lock, embedder identity, pinned model) are in
+  `docs/design-notes.md`, "Milestone 2 decisions".
+- `NOTELIGHT_HOME` relocates indexes and models; `NOTELIGHT_MODEL_CACHE`
+  relocates only models. Tests set `NOTELIGHT_HOME` per test (autouse fixture).
+- `pytest` never downloads. `NOTELIGHT_MODEL_TESTS=1` enables the real
+  bge-small test (set `NOTELIGHT_MODEL_CACHE` to reuse a downloaded model).
+- bge-small is pinned to revision `5c38ec7c405e...` with SHA-256 per file in
+  `embed.py`. Changing the model or revision changes `model_id`, which forces a
+  re-embed and makes old indexes refuse queries from the new embedder.
+- `IndexReader.search_bm25` / `search_vector` are exposed separately for the
+  M3 eval harness, which needs each retriever on its own.

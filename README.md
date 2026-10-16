@@ -39,6 +39,10 @@ with `pipx install notelight`:
 pip install notelight
 ```
 
+> **Not on PyPI yet:** 0.1.0 is built and tested but not published. Until it
+> is, install from GitHub with `pip install git+https://github.com/searope/notelight`
+> (needs Rust, see below).
+
 There are prebuilt wheels for Linux (x86_64 and aarch64, glibc 2.28+),
 Windows (x64) and macOS (Apple silicon and Intel), so you do not need Rust.
 Two limits come from ONNX Runtime, which runs the embedding model: on Intel
@@ -332,8 +336,8 @@ After changing Rust code, rebuild with `maturin develop --release`.
 | 2 | Python package: embedder, incremental indexer, CLI | ✅ |
 | 3 | Evaluation: BEIR results table, Rust vs NumPy baseline | ✅ |
 | 4 | MCP server for AI agents | ✅ |
-| 5a | Wheels on PyPI (0.1.0) | ✅ |
-| 5b | Localhost web UI, PDF/DOCX (0.2) | ⏳ |
+| 5 | Web UI, PDF/DOCX, phrase ranking; tested wheels for 5 platforms | ✅ |
+| | First PyPI release (0.1.0) | ⏳ |
 | v2 | Same core compiled to WebAssembly, in-browser app | |
 
 ## Documentation

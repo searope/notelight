@@ -84,8 +84,8 @@ C++, x64/x86 build tools, Windows SDK).
 | 2 | Python package: bindings, embedder, incremental indexer, CLI | done |
 | 3 | Eval: BEIR (SciFact, NFCorpus, FiQA) recall@10/nDCG@10 for f32, int8, binary, binary+rescore, ternary+rescore, BM25, hybrid; Rust vs NumPy baseline | done |
 | 4 | MCP server (official Python SDK, stdio): search, read_context, list_sources, index_status; demo GIF | done |
-| 5a | Wheels via maturin-action (smoke-tested per OS), sdist, CHANGELOG, PyPI 0.1.0 | release prep done; tag + publish pending the owner |
-| 5b | Localhost web UI (FastAPI + one page), PDF/DOCX extras (0.2) | **next** |
+| 5a | Wheels via maturin-action (smoke-tested per OS), sdist, CHANGELOG, PyPI 0.1.0 | done; **publish pending the owner** (PyPI trusted publisher + `pypi` environment, then tag `v0.1.0`; then delete the "Not on PyPI yet" note in README) |
+| 5b | Localhost web UI, PDF/DOCX extras, phrase ranking, CLI highlighting | done (PRs #5-#8); ships in 0.1.0 |
 | v2 | Same core compiled to wasm32 + TypeScript browser app | |
 
 ## Milestone 2 notes (for whoever picks up M3)

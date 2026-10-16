@@ -10,7 +10,7 @@ format is detected and rebuilt by `notelight index`.
 
 ## [0.1.0] - unreleased
 
-The first release on PyPI: `pip install notelight`. It covers milestones 0 to 4
+The first release on PyPI: `pip install notelight`. It covers milestones 0 to 5
 of the [roadmap](README.md#roadmap).
 
 ### Added
@@ -47,7 +47,21 @@ of the [roadmap](README.md#roadmap).
   - Ingest of `.md`, `.markdown` and `.txt` in UTF-8 or Windows-1252, skipping
     hidden and build folders and anything in `.notelightignore`.
 - **CLI**: `notelight index`, `search` (with `--json`), `status`, `mcp`,
-  `eval` and `version`; `--embedder bge-small|hashing|none` and `--offline`.
+  `serve`, `eval` and `version`; `--embedder bge-small|hashing|none` and
+  `--offline`. On a terminal, `search` highlights the matched words and
+  starts each snippet near the first match (`NO_COLOR` turns colour off).
+- **Phrase ranking** in the core, for every interface: quoted phrases
+  (`'"lock file" windows'`) rank chunks containing them first, and a chunk
+  with all query terms in order gets a bonus worth one extra first place in
+  fusion. Neutral on BEIR (within 0.002 nDCG@10); aimed at short note queries.
+- **PDF and DOCX** as optional extras (`notelight[pdf]`, `[docx]`,
+  `[documents]`; pypdf and python-docx). Citations stay `path:lines` of the
+  extracted text, with PDF pages shown beside them; DOCX headings become
+  heading paths. Without the extra, these files are skipped with a hint.
+- **Localhost web UI** as an optional extra (`notelight[web]`,
+  `notelight serve`): one page over the same service as the MCP server,
+  bound to 127.0.0.1 with a Host-header check against DNS rebinding, no
+  build step and nothing loaded from the network.
 - **MCP server** (`notelight mcp`, official Python SDK, stdio) with four
   read-only tools: `search`, `read_context`, `list_sources` and
   `index_status`. `read_context` reads only files that are in the index.

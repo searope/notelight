@@ -97,7 +97,17 @@ class SearchHit(BaseModel):
     line_end: int = Field(description="Last line of the chunk (inclusive).")
     heading_path: list[str] = Field(description="Markdown headings above the chunk.")
     snippet: str = Field(description="The start of the chunk text, on one line.")
-    score: float = Field(description="Fused (RRF) score; higher is better.")
+    score: float = Field(
+        description="Fused (RRF) score within its folder's index; higher is better. "
+        "Not comparable across folders."
+    )
+
+
+class SkippedFolder(BaseModel):
+    """An indexed folder that could not be searched."""
+
+    folder: str
+    error: str = Field(description="Why, e.g. a corrupt index; `notelight index` may fix it.")
 
 
 class SearchResponse(BaseModel):
@@ -105,6 +115,10 @@ class SearchResponse(BaseModel):
 
     query: str
     results: list[SearchHit]
+    skipped: list[SkippedFolder] = Field(
+        default_factory=list,
+        description="Folders left out of an all-folder search because they failed.",
+    )
 
 
 class FileContext(BaseModel):
@@ -288,40 +302,62 @@ class NotesService:
     def search(self, query: str, k: int = 10, folder: str | None = None) -> SearchResponse:
         """Search one folder, or every served folder when `folder` is None.
 
-        Results from several folders are merged by their fused score, which
-        is rank-based (RRF) and so comparable across indexes.
+        Folders are merged by each hit's rank within its own folder, then by
+        score among hits of equal rank. Ranking by score alone would bury
+        keyword-only folders: their fused scores top out at half of what a
+        hybrid index can reach. With all
+        folders, a folder that cannot be searched is reported in `skipped`
+        instead of failing the whole call.
         """
         if not query.strip():
             raise ToolError("query is empty")
         if not 1 <= k <= MAX_K:
             raise ToolError(f"k must be between 1 and {MAX_K}")
         if folder is not None:
-            targets = [self._resolve_folder(folder)]
-        else:
-            targets = self._usable_folders()
-            if not targets:
-                raise ToolError("no folder is indexed yet; run `notelight index <folder>` first")
-        hits: list[SearchHit] = []
-        for target in targets:
+            searcher = self.searcher(self._resolve_folder(folder))
+            return SearchResponse(query=query, results=self._search_one(searcher, query, k))
+        targets = self._usable_folders()
+        if not targets:
+            raise ToolError("no folder is indexed yet; run `notelight index <folder>` first")
+        ranked: list[tuple[int, int, SearchHit]] = []
+        skipped: list[SkippedFolder] = []
+        for order, target in enumerate(targets):
             try:
-                results = self.searcher(target).search(query, k=k)
-            except NotelightError as e:
-                raise ToolError(str(e)) from e
-            hits.extend(
-                SearchHit(
-                    location=r.location,
-                    folder=str(target),
-                    path=r.path,
-                    line_start=r.line_start,
-                    line_end=r.line_end,
-                    heading_path=r.heading_path,
-                    snippet=snippet(r.text),
-                    score=r.score,
-                )
-                for r in results
+                hits = self._search_one(self.searcher(target), query, k)
+            except (ToolError, NotelightError, OSError, ValueError) as e:
+                skipped.append(SkippedFolder(folder=str(target), error=str(e)))
+                continue
+            ranked.extend((rank, order, hit) for rank, hit in enumerate(hits))
+        if not ranked and skipped and len(skipped) == len(targets):
+            raise ToolError(
+                "no indexed folder could be searched: "
+                + "; ".join(f"{s.folder}: {s.error}" for s in skipped)
             )
-        hits.sort(key=lambda h: -h.score)
-        return SearchResponse(query=query, results=hits[:k])
+        # Interleave by per-folder rank, so every folder's best hits reach the
+        # top whatever its score scale; within one rank, the stronger hit first.
+        ranked.sort(key=lambda t: (t[0], -t[2].score, t[1]))
+        return SearchResponse(
+            query=query, results=[hit for _, _, hit in ranked[:k]], skipped=skipped
+        )
+
+    def _search_one(self, searcher: Searcher, query: str, k: int) -> list[SearchHit]:
+        try:
+            results = searcher.search(query, k=k)
+        except NotelightError as e:
+            raise ToolError(str(e)) from e
+        return [
+            SearchHit(
+                location=r.location,
+                folder=str(searcher.folder),
+                path=r.path,
+                line_start=r.line_start,
+                line_end=r.line_end,
+                heading_path=r.heading_path,
+                snippet=snippet(r.text),
+                score=r.score,
+            )
+            for r in results
+        ]
 
     # -- reading files -------------------------------------------------------
     def read_context(

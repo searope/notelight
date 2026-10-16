@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import sqlite3
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 from notelight import _core, paths
 from notelight.embed import Embedder
@@ -26,6 +29,7 @@ __all__ = [
     "indexed_files",
     "indexed_folders",
     "list_indexes",
+    "skipped_files",
     "snippet",
 ]
 
@@ -108,6 +112,10 @@ class Searcher:
     def search(self, query: str, k: int = 10) -> list[SearchResult]:
         """Hybrid BM25 + vector search (BM25 only without an embedder)."""
         vector = self._embedder.embed_query(query) if self._embedder is not None else None
+        if vector is not None and not np.any(vector):
+            # The query has no features the embedder knows (for example only
+            # punctuation with the hashing embedder): search keywords alone.
+            vector = None
         hits = self._reader.search(query, vector, k=k)
         results = []
         for hit in hits:
@@ -149,7 +157,19 @@ class IndexInfo:
 
 
 def _dir_size(path: Path) -> int:
-    return sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
+    """Total size of the files under `path`.
+
+    A sync may run at the same time (SQLite journals, old generations and
+    temporary files come and go), so files that vanish mid-scan are skipped.
+    """
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for name in filenames:
+            try:
+                total += os.stat(os.path.join(dirpath, name)).st_size
+            except OSError:
+                continue
+    return total
 
 
 def describe_index(index_dir: Path) -> IndexInfo | None:
@@ -205,6 +225,21 @@ def indexed_files(folder: str | Path) -> dict[str, tuple[int, int]]:
     return {str(p): (int(s), int(m)) for p, s, m in rows}
 
 
+def skipped_files(folder: str | Path) -> dict[str, tuple[int, int]]:
+    """Relative path -> (size, mtime_ns) of every file the last sync found but
+    could not index (binary, undecodable, unreadable). Empty for a cache
+    written before this was recorded."""
+    cache = paths.index_dir_for(folder) / CACHE_FILE
+    if not cache.is_file():
+        return {}
+    try:
+        with contextlib.closing(sqlite3.connect(f"{cache.as_uri()}?mode=ro", uri=True)) as db:
+            rows = db.execute("SELECT path, size, mtime_ns FROM skipped").fetchall()
+    except sqlite3.Error:
+        return {}
+    return {str(p): (int(s), int(m)) for p, s, m in rows}
+
+
 @dataclass(frozen=True)
 class Staleness:
     """How a folder differs from its index, judged by file size and mtime.
@@ -231,13 +266,16 @@ def check_staleness(folder: str | Path) -> Staleness:
     """Compare `folder` on disk with its last sync. Reads only file metadata."""
     root = paths.normalize_folder(folder)
     known = indexed_files(root)
+    skipped = skipped_files(root)
     added = modified = 0
     seen: set[str] = set()
     for f in walk(root):
         seen.add(f.rel_path)
         prior = known.get(f.rel_path)
         if prior is None:
-            added += 1
+            # A file the last sync skipped is not new unless it changed since.
+            if skipped.get(f.rel_path) != (f.size, f.mtime_ns):
+                added += 1
         elif prior != (f.size, f.mtime_ns):
             modified += 1
     return Staleness(added, modified, sum(1 for p in known if p not in seen))

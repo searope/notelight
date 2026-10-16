@@ -105,3 +105,15 @@ def test_mcp_refuses_a_folder_that_is_not_indexed(tmp_path: Path) -> None:
     result = runner.invoke(app, ["mcp", "--folder", str(tmp_path)])
     assert result.exit_code == 2
     assert "is not indexed" in result.output
+
+
+def test_reindex_without_embedder_keeps_the_index_embedder(notes: Path) -> None:
+    for name, model_id in (("none", None), ("hashing", "hashing-256")):
+        result = runner.invoke(app, ["index", str(notes), "--embedder", name])
+        assert result.exit_code == 0, result.output
+        # A plain re-index must not switch to bge-small (download + full re-embed).
+        result = runner.invoke(app, ["index", str(notes), "--offline"])
+        assert result.exit_code == 0, result.output
+        assert "up to date" in result.output
+        (info,) = json.loads(runner.invoke(app, ["status", "--json"]).output)
+        assert info["embedder"] == model_id

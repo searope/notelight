@@ -149,3 +149,12 @@ def test_onnx_embedder_loads_lazily(tmp_path: Path) -> None:
     assert e.embed_documents([]).shape == (0, 384)
     with pytest.raises(ModelNotAvailableError, match="--offline"):
         e.embed_query("anything")
+
+
+def test_network_failure_is_a_model_error(tmp_path: Path) -> None:
+    # The remote folder does not exist, so urllib raises URLError (an OSError).
+    spec = dataclasses.replace(
+        _fake_repo(tmp_path, b"a", b"b"), base_url=(tmp_path / "missing").as_uri()
+    )
+    with pytest.raises(ModelNotAvailableError, match="failed"):
+        ensure_model_files(spec, cache_dir=tmp_path / "cache")

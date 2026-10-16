@@ -3,19 +3,25 @@ embedder checks, locking and path handling."""
 
 from __future__ import annotations
 
+import contextlib
 import os
+import sqlite3
 import sys
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import filelock
+import numpy as np
+import numpy.typing as npt
 import pytest
 from conftest import CountingEmbedder
 
-from notelight import paths
+from notelight import indexer, paths
 from notelight.embed import HashingEmbedder
 from notelight.errors import EmbedderMismatchError, IndexBusyError, IndexNotFoundError
 from notelight.indexer import LOCK_FILE, sync
-from notelight.search import Searcher, list_indexes
+from notelight.search import Searcher, check_staleness, indexed_files, list_indexes
 
 
 def test_first_sync_indexes_everything(notes: Path, embedder: CountingEmbedder) -> None:
@@ -191,3 +197,90 @@ def test_windows_paths_are_stored_with_forward_slashes(
     paths_found = {r.path for r in Searcher(notes, embedder).search("rust python bread", k=10)}
     assert paths_found and all("\\" not in p for p in paths_found)
     assert "rust/ownership.md" in paths_found
+
+
+# -- regressions from the milestone 2-4 review -----------------------------------
+
+
+def _cache_rows(folder: Path, table: str) -> int:
+    with contextlib.closing(
+        sqlite3.connect(paths.index_dir_for(folder) / indexer.CACHE_FILE)
+    ) as db:
+        return int(db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+
+
+def test_skipped_file_does_not_make_the_index_stale(
+    notes: Path, embedder: CountingEmbedder
+) -> None:
+    blob = notes / "blob.txt"
+    blob.write_bytes(b"\x00\x01binary")
+    sync(notes, embedder)
+    assert not check_staleness(notes).stale
+    # Still reported as skipped on the next sync, without being read again.
+    assert [s.path for s in sync(notes, embedder).skipped] == ["blob.txt"]
+    # Once it changes it may have become indexable, so it counts as new.
+    blob.write_bytes(b"now plain text about sourdough\n")
+    assert check_staleness(notes).added == 1
+    stats = sync(notes, embedder)
+    assert (stats.files, stats.added, stats.skipped) == (4, 1, [])
+
+
+def test_keyword_only_sync_keeps_the_embedding_cache(
+    notes: Path, embedder: CountingEmbedder
+) -> None:
+    sync(notes, embedder)
+    cached = _cache_rows(notes, "embeddings")
+    assert cached > 0
+    sync(notes, None)
+    assert _cache_rows(notes, "embeddings") == cached
+    embedder.embedded.clear()
+    assert sync(notes, embedder).embedded == 0  # back to the model: nothing re-embedded
+
+
+class _FailingEmbedder(HashingEmbedder):
+    def __init__(self) -> None:
+        super().__init__(dim=64)
+
+    def embed_documents(self, texts: Sequence[str]) -> npt.NDArray[np.float32]:
+        raise RuntimeError("embedding interrupted")
+
+
+def test_failed_rechunk_keeps_the_live_file_list(notes: Path, embedder: CountingEmbedder) -> None:
+    sync(notes, embedder)
+    before = indexed_files(notes)
+    assert len(before) == 3
+    # A new chunk size forces a re-chunk and re-embed; make the sync fail midway.
+    with pytest.raises(RuntimeError, match="interrupted"):
+        sync(notes, _FailingEmbedder(), max_chars=60)
+    assert indexed_files(notes) == before  # the old generation is still live and described
+    assert not check_staleness(notes).stale
+    stats = sync(notes, embedder, max_chars=60)  # and a later sync completes the change
+    assert stats.generation == 2 and len(indexed_files(notes)) == 3
+
+
+def test_query_without_known_features_falls_back_to_keywords(
+    notes: Path, embedder: CountingEmbedder
+) -> None:
+    sync(notes, embedder)
+    searcher = Searcher(notes, embedder)
+    assert not embedder.embed_query("???").any()
+    assert searcher.search("???") == []  # BM25 finds nothing; no ValueError from the core
+
+
+def test_status_tolerates_files_vanishing_during_a_sync(
+    notes: Path, embedder: CountingEmbedder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sync(notes, embedder)
+    index_dir = paths.index_dir_for(notes)
+    journal = index_dir / "cache.sqlite-journal"
+    journal.write_bytes(b"x")
+    real_stat = os.stat
+
+    def stat(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+        if str(path).endswith("-journal"):
+            raise FileNotFoundError(path)  # deleted between listing and stat
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat)
+    (info,) = list_indexes()
+    assert info.error is None and info.size_bytes > 0

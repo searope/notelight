@@ -122,7 +122,7 @@ class NumpyVectors:
         return [(int(i), 1.0 - 2.0 * float(dist[i]) / self.dim) for i in ids]
 
     def search_binary_int8(self, query: F32, k: int, candidates: int = 200) -> Hits:
-        """Binary candidates, then int8 rescoring: the Rust default."""
+        """Binary candidates, then int8 rescoring (the `binary+int8` mode; not the default)."""
         q = _l2_normalize(query)
         cands = self._smallest(self._hamming(q), max(candidates, k))
         scores = (self.codes[cands] @ q) * self.scales[cands]

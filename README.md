@@ -68,11 +68,13 @@ re-run takes about as long as starting the CLI (0.5 s for the folder above).
 
 Options:
 
-- `--embedder bge-small|hashing|none`: `bge-small` (default) is
+- `--embedder bge-small|hashing|none`: `bge-small` (the default for a new
+  index) is
   [BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5),
   pinned to one revision and verified by SHA-256. `none` builds a keyword-only
-  (BM25) index with no model. `search` picks the index's own embedder
-  automatically and refuses a different one.
+  (BM25) index with no model. Without the flag, re-indexing keeps the
+  embedder the index was built with, and `search` uses it automatically and
+  refuses a different one.
 - `--offline`: never download; fail if the model is not cached.
 - Files: `.md`, `.markdown` and `.txt`, in UTF-8 or Windows-1252. Hidden
   folders (`.git`, `.obsidian`, ...), `node_modules`, `target`, `build` and

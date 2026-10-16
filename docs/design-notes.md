@@ -138,13 +138,22 @@ to the index:
 | `files` | relative path → size, mtime, content key | reading and hashing files that did not change |
 | `chunks` | `sha256(file bytes)` + chunking mode | re-chunking known content |
 | `embeddings` | `sha256(model_id + "\n" + embedded text)` | re-embedding known chunks |
+| `skipped` | relative path → size, mtime, reason | re-reading binary or undecodable files; reporting them as new in `index_status` |
 
 The embedding key comes from the exact text sent to the model (heading path
 plus chunk text) and the model id. A renamed, moved or copied file reuses its
 vectors, a file edited in one section re-embeds only the chunks that changed,
 and switching models can never return stale vectors. After a successful commit,
 rows no current file refers to are deleted, so the cache cannot grow without
-bound.
+bound. A keyword-only sync (`--embedder none`) uses no vectors and leaves the
+embedding cache alone, so switching back to the model re-embeds nothing.
+Switching between two models keeps only the current one's vectors.
+
+`files` and `skipped` describe the live generation, and readers use them
+without the writer lock: staleness checks, `notelight status` and MCP
+`read_context`. They are rewritten only after a commit, so a sync that fails
+partway, even one that changed the chunk size, leaves them matching the index
+that is still live.
 
 A file whose size and mtime match is trusted without being read. When they
 differ but the content hash matches (a `touch`, or a checkout that rewrites
@@ -319,14 +328,19 @@ ignored files such as `.env`, because none of them was indexed. The agent can
 read nothing that `search` could not already have shown it. Output is capped
 at 400 lines per call.
 
-### Searching several folders merges by fused score
+### Searching several folders merges by rank
 
 With no `folder` argument, `search` queries every served folder and merges
-the hits by score. Hybrid scores are reciprocal-rank sums, so they depend on
-ranks, not on each index's BM25 or cosine scale, and interleave reasonably.
-They are not perfectly comparable: a keyword-only index contributes one rank
-list per hit, a hybrid index two. Passing `folder` avoids the question.
-`--folder` (repeatable) limits what the server exposes at all.
+the hits by their rank within their own folder, then by score among hits of
+equal rank. Fused scores alone are not comparable across indexes: a
+keyword-only index contributes one rank list per hit and a hybrid index two,
+so a keyword-only folder's best hit (at most 1/61) could rank below a
+mediocre hybrid hit (up to 2/61) and be cut off. Merging by rank puts every
+folder's best hits near the top. A folder whose index cannot be searched
+(corrupt, unknown embedder, model unavailable offline) is listed in
+`skipped` instead of failing the whole call. Passing `folder` searches one
+folder and reports its error directly. `--folder` (repeatable) limits what
+the server exposes at all.
 
 ### mcp 2.x, structured output
 

@@ -306,3 +306,35 @@ def test_searcher_is_live(indexed: Path) -> None:
     searcher = Searcher(indexed, None)
     assert searcher.is_live()
     assert (paths.index_dir_for(indexed) / CORE_DIR / "CURRENT").is_file()
+
+
+# -- regressions from the milestone 2-4 review -----------------------------------
+
+
+@pytest.fixture
+def other(tmp_path: Path) -> Path:
+    """A second notes folder, indexed keyword-only."""
+    root = tmp_path / "other"
+    root.mkdir()
+    (root / "baking.md").write_text("# Baking\n\nSourdough bread needs a starter.\n", "utf-8")
+    sync(root, None)
+    return root
+
+
+async def test_all_folder_search_skips_a_broken_index(indexed: Path, other: Path) -> None:
+    live = Searcher(other, None).manifest["generation"]
+    gen_dir = paths.index_dir_for(other) / CORE_DIR / f"gen-{live:06d}"
+    (gen_dir / "docs.bin").write_bytes(b"corrupt")
+    out = await call(NotesService(), "search", {"query": "sourdough"})
+    assert {r["folder"] for r in out["results"]} == {str(indexed)}
+    assert [s["folder"] for s in out["skipped"]] == [str(other.resolve())]
+    # Asking for the broken folder by name still reports its error.
+    msg = await call_error(NotesService(), "search", {"query": "x", "folder": str(other)})
+    assert "invalid index data" in msg or "corrupt" in msg.lower()
+
+
+async def test_all_folder_search_interleaves_folders_by_rank(indexed: Path, other: Path) -> None:
+    # `other` is keyword-only, so its scores are at most half a hybrid index's.
+    out = await call(NotesService(), "search", {"query": "sourdough bread starter", "k": 2})
+    assert {r["folder"] for r in out["results"]} == {str(indexed), str(other.resolve())}
+    assert out["skipped"] == []

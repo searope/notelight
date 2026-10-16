@@ -78,6 +78,12 @@ CREATE TABLE IF NOT EXISTS chunks (
     PRIMARY KEY (doc_key, ord)
 );
 CREATE TABLE IF NOT EXISTS embeddings (key TEXT PRIMARY KEY, vector BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS skipped (
+    path     TEXT PRIMARY KEY,
+    size     INTEGER NOT NULL,
+    mtime_ns INTEGER NOT NULL,
+    reason   TEXT NOT NULL
+);
 """
 
 
@@ -112,6 +118,14 @@ class _Doc:
 
     file: SourceFile
     doc_key: str
+
+
+@dataclass(frozen=True)
+class _Skipped:
+    """A file found in this sync that cannot be indexed, and why."""
+
+    file: SourceFile
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -163,11 +177,14 @@ def _open_cache(index_dir: Path, chunker: str) -> sqlite3.Connection:
     db.executescript(_SCHEMA)
     meta = dict(db.execute("SELECT key, value FROM meta").fetchall())
     if meta.get("schema", CACHE_SCHEMA) != CACHE_SCHEMA or meta.get("chunker") != chunker:
-        # Chunking settings changed: cached chunks no longer apply. Embeddings
+        # Chunking settings changed: cached chunks no longer apply, and the
+        # scan re-reads every file because no doc_key is cached any more.
+        # `files` and `skipped` are left alone: readers (status, staleness,
+        # MCP read_context) keep describing the live generation until the
+        # new one is committed and `_record_files` replaces them. Embeddings
         # stay valid because they are keyed by the exact text embedded.
         with db:
             db.execute("DELETE FROM chunks")
-            db.execute("DELETE FROM files")
     with db:
         db.executemany(
             "INSERT OR REPLACE INTO meta VALUES (?, ?)",
@@ -186,27 +203,42 @@ def _scan(
     db: sqlite3.Connection,
     max_chars: int,
     stats: SyncStats,
-) -> list[_Doc]:
-    """Walk the folder, refresh the chunk cache, and return the files to index."""
+) -> tuple[list[_Doc], list[_Skipped]]:
+    """Walk the folder, refresh the chunk cache, and return the files to index
+    and the files that were found but cannot be indexed."""
     known = {
         row[0]: (row[1], row[2], row[3])
         for row in db.execute("SELECT path, size, mtime_ns, doc_key FROM files")
     }
+    known_skipped = {
+        row[0]: (row[1], row[2], row[3])
+        for row in db.execute("SELECT path, size, mtime_ns, reason FROM skipped")
+    }
     cached_docs = {row[0] for row in db.execute("SELECT DISTINCT doc_key FROM chunks")}
     docs: list[_Doc] = []
+    skipped: list[_Skipped] = []
+
+    def skip(f: SourceFile, reason: str) -> None:
+        stats.skipped.append(SkippedFile(f.rel_path, reason))
+        skipped.append(_Skipped(f, reason))
+
     for f in walk(root):
         prior = known.get(f.rel_path)
         if prior is not None and prior[:2] == (f.size, f.mtime_ns) and prior[2] in cached_docs:
             docs.append(_Doc(f, prior[2]))
             continue
+        prior_skip = known_skipped.get(f.rel_path)
+        if prior_skip is not None and prior_skip[:2] == (f.size, f.mtime_ns):
+            skip(f, prior_skip[2])  # unchanged since it was last rejected
+            continue
         try:
             data = f.abs_path.read_bytes()
         except OSError as e:
-            stats.skipped.append(SkippedFile(f.rel_path, f"unreadable: {e.strerror or e}"))
+            skip(f, f"unreadable: {e.strerror or e}")
             continue
         decoded = decode(data)
         if decoded.text is None:
-            stats.skipped.append(SkippedFile(f.rel_path, decoded.skip_reason or "unreadable"))
+            skip(f, decoded.skip_reason or "unreadable")
             continue
         doc_key = _doc_key(hashlib.sha256(data).hexdigest(), f.is_markdown)
         if prior is None:
@@ -235,7 +267,7 @@ def _scan(
     seen = {d.file.rel_path for d in docs}
     stats.removed = sum(1 for p in known if p not in seen)
     stats.files = len(docs)
-    return docs
+    return docs, skipped
 
 
 def _load_chunks(db: sqlite3.Connection, doc_key: str) -> list[_CachedChunk]:
@@ -311,26 +343,40 @@ def _load_vectors(
     return out
 
 
-def _prune(db: sqlite3.Connection, docs: list[_Doc], live_keys: set[str]) -> None:
-    """Drop cache rows for files and chunks that are no longer in the folder."""
+def _prune(db: sqlite3.Connection, docs: list[_Doc], live_keys: set[str] | None) -> None:
+    """Drop cached chunks no longer in the folder and, when `live_keys` is
+    given, embeddings this index no longer uses.
+
+    A keyword-only sync passes `None`: it uses no embeddings, so it must not
+    throw away the vectors of the model the folder was indexed with before.
+    """
     with db:
         db.execute("CREATE TEMP TABLE IF NOT EXISTS live_docs (doc_key TEXT PRIMARY KEY)")
         db.execute("CREATE TEMP TABLE IF NOT EXISTS live_keys (key TEXT PRIMARY KEY)")
         db.execute("DELETE FROM live_docs")
         db.execute("DELETE FROM live_keys")
         db.executemany("INSERT OR IGNORE INTO live_docs VALUES (?)", [(d.doc_key,) for d in docs])
-        db.executemany("INSERT OR IGNORE INTO live_keys VALUES (?)", [(k,) for k in live_keys])
+        db.executemany(
+            "INSERT OR IGNORE INTO live_keys VALUES (?)", [(k,) for k in live_keys or ()]
+        )
         db.execute("DELETE FROM chunks WHERE doc_key NOT IN (SELECT doc_key FROM live_docs)")
-        db.execute("DELETE FROM embeddings WHERE key NOT IN (SELECT key FROM live_keys)")
+        if live_keys is not None:
+            db.execute("DELETE FROM embeddings WHERE key NOT IN (SELECT key FROM live_keys)")
 
 
-def _record_files(db: sqlite3.Connection, docs: list[_Doc]) -> None:
-    """Remember each file's size, mtime and content key for the next scan."""
+def _record_files(db: sqlite3.Connection, docs: list[_Doc], skipped: list[_Skipped]) -> None:
+    """Remember each file's size, mtime and content key for the next scan, and
+    the skipped files, so staleness checks do not report them as new."""
     with db:
         db.execute("DELETE FROM files")
         db.executemany(
             "INSERT INTO files VALUES (?, ?, ?, ?)",
             [(d.file.rel_path, d.file.size, d.file.mtime_ns, d.doc_key) for d in docs],
+        )
+        db.execute("DELETE FROM skipped")
+        db.executemany(
+            "INSERT INTO skipped VALUES (?, ?, ?, ?)",
+            [(k.file.rel_path, k.file.size, k.file.mtime_ns, k.reason) for k in skipped],
         )
 
 
@@ -381,13 +427,14 @@ def sync(
         try:
             if progress is not None:
                 progress("scan", 0, 0)
-            docs = _scan(root, db, max_chars, stats)
+            docs, skipped = _scan(root, db, max_chars, stats)
             chunks = {d.doc_key: _load_chunks(db, d.doc_key) for d in docs}
             stats.chunks = sum(len(c) for c in chunks.values())
 
             unchanged = not (stats.added or stats.changed or stats.removed)
             if unchanged and _index_is_current(core_root, embedder, chunker):
-                _record_files(db, docs)  # touched-but-identical files: skip re-hashing next time
+                # Touched-but-identical files: skip re-hashing them next time.
+                _record_files(db, docs, skipped)
                 stats.up_to_date = True
                 stats.seconds = time.perf_counter() - started
                 return stats
@@ -420,8 +467,8 @@ def sync(
                     writer.add(record, vec)
             info = writer.commit(core_root)
             stats.generation = info.generation
-            _record_files(db, docs)
-            _prune(db, docs, set(texts))
+            _record_files(db, docs, skipped)
+            _prune(db, docs, set(texts) if embedder is not None else None)
         finally:
             db.close()
     stats.seconds = time.perf_counter() - started

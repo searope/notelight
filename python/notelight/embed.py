@@ -205,7 +205,13 @@ def ensure_model_files(
                 )
             if on_download is not None:
                 on_download(file)
-            download_verified(spec.url(file), dest, file.sha256, error=ModelNotAvailableError)
+            try:
+                download_verified(spec.url(file), dest, file.sha256, error=ModelNotAvailableError)
+            except OSError as e:  # URLError, HTTPError, timeouts, disk errors
+                raise ModelNotAvailableError(
+                    f"downloading {spec.repo} ({file.path}) failed: {e}; check the network, "
+                    "or use --embedder none for a keyword-only index"
+                ) from e
         local.append(dest)
     return local[0], local[1]
 

@@ -68,8 +68,12 @@ def index(
     offline: OfflineOpt = False,
     quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Print only errors.")] = False,
 ) -> None:
-    """Create or update the index for FOLDER. Only changed files are re-embedded."""
-    emb = _embedder(embedder or "bge-small", offline)
+    """Create or update the index for FOLDER. Only changed files are re-embedded.
+
+    Without --embedder, an existing index keeps the embedder it was built
+    with, and a new index uses bge-small.
+    """
+    emb = _embedder(embedder or _current_embedder_name(folder) or "bge-small", offline)
     announced = False
 
     def progress(stage: str, done: int, total: int) -> None:
@@ -86,6 +90,23 @@ def index(
         _fail(str(e))
     if not quiet:
         _print_sync(stats)
+
+
+def _current_embedder_name(folder: Path) -> str | None:
+    """The registry name of the embedder FOLDER's index was built with, or
+    None if the folder has no readable index yet."""
+    try:
+        indexed_with = Searcher(folder, None).manifest.get("embedder")
+    except (NotelightError, OSError):
+        return None  # not indexed, or unreadable: the sync rebuilds it
+    name = name_for_model_id(indexed_with)
+    if name is None:
+        _fail(
+            f"the index for {paths.normalize_folder(folder)} uses embedder {indexed_with!r}, "
+            "which this version does not know; pass --embedder to rebuild it",
+            code=2,
+        )
+    return name
 
 
 def _print_sync(s: SyncStats) -> None:

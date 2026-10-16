@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/notelight-core", "crates/notelight-py"]
+members = ["crates/notelight-core", "crates/notelight-py", "crates/notelight-wasm"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,3 +25,12 @@ module_name_repetitions = "allow"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# The browser build (`scripts/build_wasm.py`). Full LTO and stripping the
+# symbol names shrink the .wasm from 298 to 245 KiB (102 KiB gzipped).
+# opt-level stays 3: "s" saves another 18 KiB gzipped but made vector search
+# 25% slower (docs/design-notes.md, "v2 spike decisions").
+[profile.wasm-release]
+inherits = "release"
+lto = "fat"
+strip = true

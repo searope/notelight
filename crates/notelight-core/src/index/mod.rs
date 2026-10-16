@@ -30,7 +30,7 @@ pub use docs::{ChunkRecord, Docs, DocsBuilder};
 pub use manifest::{Bm25Settings, FORMAT_NAME, Manifest, SCHEMA_VERSION};
 pub use reader::{DEFAULT_PHRASE_BOOST, Hit, IndexReader, OpenOptions, SearchOpts};
 pub use storage::Storage;
-pub use writer::{CommitInfo, IndexWriter, WriterOptions};
+pub use writer::{CommitInfo, GenerationFiles, IndexWriter, WriterOptions};
 
 use std::path::{Path, PathBuf};
 

@@ -37,6 +37,19 @@ pub struct CommitInfo {
     pub n_chunks: u32,
 }
 
+/// The contents of one generation, built in memory by [`IndexWriter::build`].
+#[derive(Debug, Clone)]
+pub struct GenerationFiles {
+    /// The manifest; [`Manifest::to_json`] gives the bytes of `manifest.json`.
+    pub manifest: Manifest,
+    /// Bytes of `docs.bin`.
+    pub docs: Vec<u8>,
+    /// Bytes of `bm25.bin`.
+    pub bm25: Vec<u8>,
+    /// Bytes of `vectors.bin`, absent for a keyword-only index.
+    pub vectors: Option<Vec<u8>>,
+}
+
 /// Accumulates chunks in memory, then writes them as one generation.
 #[derive(Debug)]
 pub struct IndexWriter {
@@ -101,6 +114,46 @@ impl IndexWriter {
         self.docs.is_empty()
     }
 
+    /// Serialize the index as generation number `generation`, in memory.
+    ///
+    /// [`Self::commit`] writes these bytes to disk; platforms without a
+    /// filesystem (the browser build) keep them and pass them to
+    /// [`super::IndexReader::from_parts`].
+    ///
+    /// # Errors
+    /// Fails if counts exceed 32-bit limits or the manifest cannot be built.
+    pub fn build(self, generation: u64) -> Result<GenerationFiles> {
+        let n_chunks = crate::bin_format::to_u32(self.docs.len(), "chunk count")?;
+        let docs = self.docs.finish()?;
+        let bm25 = self.bm25.finish(self.opts.bm25)?;
+        let vectors = self.vectors.map(VectorBuilder::finish).transpose()?;
+
+        let mut files = BTreeMap::new();
+        files.insert(DOCS_FILE.to_string(), docs.len() as u64);
+        files.insert(BM25_FILE.to_string(), bm25.len() as u64);
+        if let Some(v) = &vectors {
+            files.insert(VECTORS_FILE.to_string(), v.len() as u64);
+        }
+        let manifest = Manifest {
+            format: FORMAT_NAME.to_string(),
+            schema_version: SCHEMA_VERSION,
+            created_by: format!("notelight-core {}", crate::VERSION),
+            generation,
+            n_chunks,
+            dim: crate::bin_format::to_u32(self.opts.dim, "dimension")?,
+            embedder: self.opts.embedder,
+            bm25: self.opts.bm25.into(),
+            files,
+            metadata: self.opts.metadata,
+        };
+        Ok(GenerationFiles {
+            manifest,
+            docs,
+            bm25,
+            vectors,
+        })
+    }
+
     /// Write the next generation under `root` and make it live.
     ///
     /// 1. Sweep leftovers of earlier failed commits: temporary directories,
@@ -127,31 +180,13 @@ impl IndexWriter {
             .copied()
             .max(live_before)
             .map_or(1, |g| g + 1);
-        let n_chunks = crate::bin_format::to_u32(self.docs.len(), "chunk count")?;
-
-        let mut files: Vec<(&str, Vec<u8>)> = vec![
-            (DOCS_FILE, self.docs.finish()?),
-            (BM25_FILE, self.bm25.finish(self.opts.bm25)?),
-        ];
-        if let Some(v) = self.vectors {
-            files.push((VECTORS_FILE, v.finish()?));
+        let built = self.build(generation)?;
+        let n_chunks = built.manifest.n_chunks;
+        let manifest = built.manifest;
+        let mut files = vec![(DOCS_FILE, built.docs), (BM25_FILE, built.bm25)];
+        if let Some(v) = built.vectors {
+            files.push((VECTORS_FILE, v));
         }
-
-        let manifest = Manifest {
-            format: FORMAT_NAME.to_string(),
-            schema_version: SCHEMA_VERSION,
-            created_by: format!("notelight-core {}", crate::VERSION),
-            generation,
-            n_chunks,
-            dim: crate::bin_format::to_u32(self.opts.dim, "dimension")?,
-            embedder: self.opts.embedder,
-            bm25: self.opts.bm25.into(),
-            files: files
-                .iter()
-                .map(|(name, bytes)| ((*name).to_string(), bytes.len() as u64))
-                .collect(),
-            metadata: self.opts.metadata,
-        };
 
         let suffix = unique_suffix();
         let final_dir = root.join(generation_dir_name(generation));

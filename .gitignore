@@ -13,3 +13,6 @@ dist/
 *.egg-info/
 .DS_Store
 .claude/settings.local.json
+
+# Built by scripts/build_wasm.py
+web-demo/pkg/

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>notelight in the browser</title>
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header>
+  <h1>notelight <span class="tag">WebAssembly spike</span></h1>
+  <p class="lede">
+    The Rust search core, compiled to WebAssembly. The index is read into this
+    page and searched here: nothing is uploaded.
+  </p>
+</header>
+
+<main>
+  <section class="load" aria-label="Choose an index">
+    <button id="load-sample" type="button">Load the sample index</button>
+    <label class="picker">
+      <span>Open an index folder…</span>
+      <input id="pick" type="file" webkitdirectory multiple>
+    </label>
+    <p class="hint">
+      The sample is this repository's <code>docs/</code>, indexed keyword-only.
+      To open your own, pick the index folder <code>notelight status</code> prints
+      (or one <code>gen-NNNNNN</code> folder inside it).
+    </p>
+  </section>
+
+  <p id="status" class="status" role="status" aria-live="polite">Loading the WebAssembly module…</p>
+
+  <form id="search" class="search" role="search" autocomplete="off" hidden>
+    <label class="visually-hidden" for="q">Search</label>
+    <input id="q" type="search" placeholder="Search, e.g. memory mapped files" spellcheck="false">
+    <label class="visually-hidden" for="k">Results</label>
+    <select id="k" title="Results">
+      <option>5</option><option selected>10</option><option>20</option>
+    </select>
+    <button type="submit">Search</button>
+    <button id="bench" type="button" class="secondary">Benchmark</button>
+  </form>
+
+  <p id="timing" class="timing"></p>
+  <pre id="bench-out" class="bench" hidden></pre>
+  <ol id="results" class="results" aria-label="Results"></ol>
+</main>
+
+<template id="result">
+  <li>
+    <div class="where"><span class="path"></span><span class="lines"></span></div>
+    <div class="headings"></div>
+    <p class="text"></p>
+    <div class="score"></div>
+  </li>
+</template>
+</body>
+</html>

@@ -337,7 +337,7 @@ After changing Rust code, rebuild with `maturin develop --release`.
 | 4 | MCP server for AI agents | ✅ |
 | 5 | Web UI, PDF/DOCX, phrase ranking; tested wheels for 5 platforms | ✅ |
 | | First PyPI release ([0.1.0](https://pypi.org/project/notelight/0.1.0/)) | ✅ |
-| v2 | Same core compiled to WebAssembly, in-browser app | |
+| v2 | Same core compiled to WebAssembly, in-browser app | 🚧 [spike](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-spike-the-core-in-the-browser): search runs in the browser at native speed |
 
 ## Documentation
 

@@ -73,6 +73,19 @@ pub struct Hit {
     pub vector_rank: Option<u32>,
 }
 
+/// Fail unless `manifest` records `bytes.len()` as the size of file `name`.
+fn check_size(manifest: &Manifest, name: &str, bytes: &[u8]) -> Result<()> {
+    let expected = manifest.files.get(name).copied();
+    if expected == Some(bytes.len() as u64) {
+        Ok(())
+    } else {
+        Err(Error::format(format!(
+            "{name}: size {} does not match manifest ({expected:?})",
+            bytes.len()
+        )))
+    }
+}
+
 /// A read-only, opened index generation.
 #[derive(Debug)]
 pub struct IndexReader {
@@ -104,13 +117,7 @@ impl IndexReader {
         let load = |name: &str| -> Result<Storage> {
             let path = dir.join(name);
             let storage = Storage::open(&path, opts.mmap)?;
-            let expected = manifest.files.get(name).copied();
-            if expected != Some(storage.as_ref().len() as u64) {
-                return Err(Error::format(format!(
-                    "{name}: size {} does not match manifest ({expected:?})",
-                    storage.as_ref().len()
-                )));
-            }
+            check_size(&manifest, name, storage.as_ref())?;
             Ok(storage)
         };
 
@@ -125,7 +132,8 @@ impl IndexReader {
     }
 
     /// Build a reader from in-memory file contents, for platforms without a
-    /// filesystem (the browser build) and for tests.
+    /// filesystem (the browser build) and for tests. The same checks apply as
+    /// for [`Self::open_generation`], including file sizes against the manifest.
     ///
     /// # Errors
     /// Fails if any part is invalid or the parts disagree.
@@ -136,6 +144,11 @@ impl IndexReader {
         vectors: Option<Vec<u8>>,
     ) -> Result<Self> {
         let manifest = Manifest::from_json(manifest_json)?;
+        check_size(&manifest, DOCS_FILE, &docs)?;
+        check_size(&manifest, BM25_FILE, &bm25)?;
+        if let Some(v) = &vectors {
+            check_size(&manifest, VECTORS_FILE, v)?;
+        }
         let docs = Docs::from_bytes(Storage::Owned(docs))?;
         let bm25 = Bm25::from_bytes(Storage::Owned(bm25))?;
         let vectors = vectors

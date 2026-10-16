@@ -19,7 +19,10 @@ thiserror = "2"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 memmap2 = "0.9"
 
-[dev-dependencies]
+# Native-only test tools: the property tests, integration tests and benchmarks
+# need threads, a clock and a filesystem. The unit tests (`--lib`) also run as
+# wasm32 under Node; see `.cargo/config.toml`.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 proptest = "1"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 tempfile = "3"

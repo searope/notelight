@@ -108,7 +108,8 @@ fn chunk_returns_a_record_with_camel_case_fields() {
     let idx = sample();
     let id = idx.hits_bm25("wasm32", 1)[0].id;
     let chunk = idx.chunk(id).unwrap();
-    assert!(get(&chunk, "path").as_string().unwrap().ends_with(".md"));
+    let path = get(&chunk, "path").as_string().unwrap();
+    assert_eq!(std::path::Path::new(&path).extension(), Some("md".as_ref()));
     assert!(js_sys::Array::is_array(&get(&chunk, "headingPath")));
     assert!(get(&chunk, "lineStart").as_f64().unwrap() >= 1.0);
     assert!(get(&chunk, "text").as_string().is_some());

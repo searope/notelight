@@ -11,6 +11,7 @@
 //   ?model=<url of a folder>             fetch the model files from there instead
 //                                        of the Hub (laid out like the Python
 //                                        model cache's revision folder)
+//   ?threads=1                           embed on one thread (no service worker)
 import init, { Index, version } from "./pkg/notelight_wasm.js";
 import { bench, benchEmbedded, formatBench } from "./bench.js";
 import {
@@ -54,9 +55,10 @@ function loadEmbedder() {
     } catch {
       throw new Error("onnxruntime-web is not in web-demo/vendor/; run: python scripts/vendor_ort.py");
     }
-    // Threads need a cross-origin isolated page (COOP and COEP headers:
-    // `serve_demo.py --isolated`); a plain static server gets one thread.
-    ort.env.wasm.numThreads = crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency) : 1;
+    // Threads need a cross-origin isolated page: COOP and COEP headers from
+    // the server (`serve_demo.py --isolated`) or from coi-sw.js (see isolate()).
+    const threaded = crossOriginIsolated && params.get("threads") !== "1";
+    ort.env.wasm.numThreads = threaded ? Math.min(4, navigator.hardwareConcurrency) : 1;
     const cache = await browserCache(CACHE_NAME);
     const onProgress = ({ file, received, total }) => {
       if (file === BGE_SMALL_EN_V15.onnx.path) {
@@ -266,7 +268,31 @@ async function runBench() {
   }
 }
 
+/**
+ * Make the page cross-origin isolated where the server does not send the
+ * headers (GitHub Pages, `python -m http.server`): register coi-sw.js, which
+ * adds them to this origin's responses, and reload once so the page itself
+ * is served with them. Returns true when a reload is under way. Skipped with
+ * `?threads=1`, and tried at most once per tab so it can never loop.
+ */
+async function isolate() {
+  if (crossOriginIsolated || params.get("threads") === "1") return false;
+  if (!isSecureContext || !("serviceWorker" in navigator)) return false;
+  const key = "notelight-isolation-tried";
+  try {
+    if (sessionStorage.getItem(key)) return false;
+    sessionStorage.setItem(key, "1");
+    await navigator.serviceWorker.register("./coi-sw.js");
+    await navigator.serviceWorker.ready;
+  } catch {
+    return false; // storage or service workers blocked: run on one thread
+  }
+  location.reload();
+  return true;
+}
+
 async function main() {
+  if (await isolate()) return;
   try {
     await init();
   } catch (e) {

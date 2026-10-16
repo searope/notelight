@@ -23,6 +23,10 @@ format is detected and rebuilt by `notelight index`.
   on 1.
 - `scripts/serve_demo.py` serves the demo with correct `.mjs`/`.wasm` types
   (and, with `--isolated`, the headers WebAssembly threads need).
+- `web-demo/coi-sw.js`: a service worker that adds those headers on hosts
+  that cannot send them (GitHub Pages), so the browser embedder uses 4
+  threads there too (about 10 ms per query instead of 29 ms). The first visit
+  reloads once; `?threads=1` opts out.
 - **Notes benchmark**: `notelight eval notes` scores every method on 82
   short, note-style queries (keywords, identifiers and phrases, questions,
   paraphrases) over this repository's docs, bundled with the package and

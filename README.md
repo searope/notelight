@@ -1,5 +1,6 @@
 # notelight
 
+[![PyPI](https://img.shields.io/pypi/v/notelight.svg)](https://pypi.org/project/notelight/)
 [![CI](https://github.com/searope/notelight/actions/workflows/ci.yml/badge.svg)](https://github.com/searope/notelight/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://github.com/searope/notelight/blob/main/Cargo.toml)
@@ -38,10 +39,6 @@ with `pipx install notelight`:
 ```bash
 pip install notelight
 ```
-
-> **Not on PyPI yet:** 0.1.0 is built and tested but not published. Until it
-> is, install from GitHub with `pip install git+https://github.com/searope/notelight`
-> (needs Rust, see below).
 
 There are prebuilt wheels for Linux (x86_64 and aarch64, glibc 2.28+),
 Windows (x64) and macOS (Apple silicon and Intel), so you do not need Rust.
@@ -337,7 +334,7 @@ After changing Rust code, rebuild with `maturin develop --release`.
 | 3 | Evaluation: BEIR results table, Rust vs NumPy baseline | ✅ |
 | 4 | MCP server for AI agents | ✅ |
 | 5 | Web UI, PDF/DOCX, phrase ranking; tested wheels for 5 platforms | ✅ |
-| | First PyPI release (0.1.0) | ⏳ |
+| | First PyPI release ([0.1.0](https://pypi.org/project/notelight/0.1.0/)) | ✅ |
 | v2 | Same core compiled to WebAssembly, in-browser app | |
 
 ## Documentation

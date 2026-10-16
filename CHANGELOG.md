@@ -8,7 +8,7 @@ format is detected and rebuilt by `notelight index`.
 
 ## [Unreleased]
 
-## [0.1.0] - unreleased
+## [0.1.0] - 2026-10-16
 
 The first release on PyPI: `pip install notelight`. It covers milestones 0 to 5
 of the [roadmap](README.md#roadmap).

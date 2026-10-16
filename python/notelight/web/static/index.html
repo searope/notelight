@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>notelight</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <h1 class="brand">notelight</h1>
+  <button id="theme" class="icon-button" type="button" aria-label="Switch theme" title="Switch theme">
+    <span aria-hidden="true">◐</span>
+  </button>
+</header>
+
+<main>
+  <form id="search-form" class="search" role="search" autocomplete="off">
+    <label class="visually-hidden" for="q">Search your notes</label>
+    <input id="q" name="q" type="search" placeholder="Search your notes  ( / )" autofocus
+           spellcheck="false" maxlength="1000">
+    <label class="visually-hidden" for="folder">Folder</label>
+    <select id="folder" name="folder">
+      <option value="">All folders</option>
+    </select>
+    <button type="submit">Search</button>
+  </form>
+
+  <section id="sources" class="sources" aria-label="Indexed folders"></section>
+
+  <p id="message" class="message" role="status" aria-live="polite"></p>
+  <ol id="results" class="results" aria-label="Results"></ol>
+
+  <p class="keys" aria-hidden="true">
+    <kbd>/</kbd> search · <kbd>↓</kbd><kbd>↑</kbd> or <kbd>j</kbd><kbd>k</kbd> move ·
+    <kbd>Enter</kbd> expand · <kbd>Esc</kbd> back to search
+  </p>
+</main>
+
+<template id="result-template">
+  <li class="result">
+    <button class="result-head" type="button" aria-expanded="false">
+      <span class="location"></span>
+      <span class="headings"></span>
+      <span class="snippet"></span>
+      <span class="folder-name"></span>
+    </button>
+    <div class="context" hidden></div>
+  </li>
+</template>
+</body>
+</html>

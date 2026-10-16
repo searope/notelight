@@ -52,6 +52,38 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-targets
 
+  wasm:
+    name: WebAssembly (core + notelight-wasm under Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Same pinned toolchain as the lint job, so clippy on wasm32 sees the same lints.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.0
+          targets: wasm32-unknown-unknown, wasm32-wasip1
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Install wasm-bindgen-cli (the version Cargo.lock pins)
+        run: |
+          version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
+          cargo install wasm-bindgen-cli --version "$version" --locked
+      - name: Core builds for the browser
+        run: cargo build -p notelight-core --target wasm32-unknown-unknown
+      - run: cargo clippy -p notelight-core -p notelight-wasm --lib --target wasm32-unknown-unknown -- -D warnings
+      # 32-bit usize: the core's unit tests as wasm32-wasip1 under Node's WASI.
+      - name: Core unit tests as wasm32 (Node WASI)
+        run: cargo test -p notelight-core --lib --target wasm32-wasip1
+      - name: notelight-wasm native tests
+        run: cargo test -p notelight-wasm
+      - name: notelight-wasm JS API under Node (wasm-bindgen-test)
+        run: cargo test -p notelight-wasm --test node --target wasm32-unknown-unknown
+      - name: Build the demo package and report its size
+        run: python3 scripts/build_wasm.py
+
   rust-windows:
     name: Rust tests on Windows (mmap + generation swap)
     runs-on: windows-latest

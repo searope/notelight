@@ -31,10 +31,13 @@ crates/notelight-core/   pure Rust engine, no Python/ML/async deps (WASM-portabl
   benches/search.rs      criterion benchmarks (numbers quoted in README)
 crates/notelight-py/     thin PyO3 bindings -> python module notelight._core
 crates/notelight-py/src/ lib.rs, errors.rs (core Error -> Python exceptions), chunking.rs, index.rs
+crates/notelight-wasm/   wasm-bindgen bindings (v2): Index over in-memory files; tests/node.rs runs under Node
 python/notelight/        Python package: embed.py, ingest.py, documents.py (PDF/DOCX), indexer.py, search.py, paths.py, cli.py, mcp_server.py,
                          download.py, eval/ (datasets, metrics, NumPy baseline, runner, report)
                          web/ (`notelight serve`: FastAPI over NotesService + static/ page)
-scripts/                 make_demo_gif.py (README demo GIF from a real MCP session)
+scripts/                 make_demo_gif.py (README demo GIF from a real MCP session),
+                         build_wasm.py (-> web-demo/pkg), make_sample_index.py, wasi_run.mjs
+web-demo/                static browser demo of the wasm build + committed sample index
 tests/                   pytest
 docs/                    design-notes.md, index-format.md (spec), results.md (BEIR numbers), learning/
 ```
@@ -50,6 +53,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 cargo bench -p notelight-core --bench search
 $env:PROPTEST_CASES=20000; cargo test --release -p notelight-core --test properties
+
+# WebAssembly (v2); runners are set in .cargo/config.toml
+rustup target add wasm32-unknown-unknown wasm32-wasip1
+cargo install wasm-bindgen-cli --version 0.2.129 --locked   # must equal Cargo.lock's wasm-bindgen
+cargo test --target wasm32-unknown-unknown -p notelight-wasm --test node   # JS API under Node
+cargo test --target wasm32-wasip1 -p notelight-core --lib                  # core unit tests as wasm32
+python scripts/build_wasm.py                                              # web-demo/pkg + size report
 ```
 
 The `_core` extension needs the MSVC C++ build tools (Desktop development with
@@ -86,7 +96,7 @@ C++, x64/x86 build tools, Windows SDK).
 | 4 | MCP server (official Python SDK, stdio): search, read_context, list_sources, index_status; demo GIF | done |
 | 5a | Wheels via maturin-action (smoke-tested per OS), sdist, CHANGELOG, PyPI 0.1.0 | done; **0.1.0 published to PyPI 2026-10-16** (tag `v0.1.0`; trusted publishing via the `pypi` environment, which needs the owner's approval per release) |
 | 5b | Localhost web UI, PDF/DOCX extras, phrase ranking, CLI highlighting | done (PRs #5-#8); ships in 0.1.0 |
-| v2 | Same core compiled to wasm32 + TypeScript browser app | |
+| v2 | Same core compiled to wasm32 + TypeScript browser app | spike done: core runs in the browser at native speed (`web-demo/`); app not started |
 
 ## Milestone 2 notes (for whoever picks up M3)
 
@@ -129,6 +139,22 @@ C++, x64/x86 build tools, Windows SDK).
 - The README demo GIF (`docs/assets/mcp-demo.gif`) is rendered by
   `scripts/make_demo_gif.py` from a real stdio session over `docs/` (needs
   Pillow and the cached bge-small). Re-run it when search results change.
+
+## v2 spike notes (for whoever builds the browser app)
+
+- The core is unchanged for wasm32; keep it that way: no `cfg` in the core
+  beyond `storage.rs`, and no JS types. Browser concerns go in
+  `crates/notelight-wasm`. Decisions, measurements and the list of what the
+  app needs next are in `docs/design-notes.md`, "v2 spike: the core in the
+  browser".
+- Browsers build and open generations from bytes:
+  `IndexWriter::build` -> `GenerationFiles`, `IndexReader::from_parts`.
+- Every `#[wasm_bindgen]` method has a plain-Rust twin (`hits_bm25`, `hits`,
+  `record`) for native tests; creating a `JsValue` natively panics.
+- `web-demo/sample-index/` is a committed fixture read by `tests/node.rs`.
+  Rebuild it with `scripts/make_sample_index.py` after a schema change.
+- The wasm-bindgen crate and CLI versions must match exactly; bump both together
+  (CI installs the CLI version from `Cargo.lock`).
 
 ## Releasing (milestone 5a)
 

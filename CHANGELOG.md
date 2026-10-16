@@ -8,6 +8,22 @@ format is detected and rebuilt by `notelight index`.
 
 ## [Unreleased]
 
+### Added
+
+- **v2 spike: the core in the browser.** `notelight-wasm` (wasm-bindgen
+  bindings: open an index from in-memory files, `searchBm25`, `search`,
+  `chunk`), a static demo in `web-demo/` that searches an index entirely
+  client-side, and a CI job that runs the core's unit tests as wasm32 and the
+  JavaScript API under Node. Search latency in Chrome matches native; the
+  module is 245 KiB (102 KiB gzipped).
+- `IndexWriter::build` serializes a generation in memory (`GenerationFiles`);
+  `commit` writes exactly those bytes.
+
+### Changed
+
+- `IndexReader::from_parts` checks file sizes against the manifest, as opening
+  from disk always did.
+
 ### Fixed
 
 - The CLI writes UTF-8 when its output is piped or redirected, on every OS.

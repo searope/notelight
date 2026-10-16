@@ -9,12 +9,14 @@
 **Private semantic search over your own files, for you and your AI agents.**
 A Rust retrieval engine with a Python interface, a CLI, and an MCP server, with
 retrieval quality you can measure.
+[How it works](https://github.com/searope/notelight/blob/main/docs/how-it-works.md) walks through the design end to end in a few minutes.
 
 > **Status: 0.1.0, alpha.** You can index a folder of notes, search it
 > from the command line or [from Claude, Cursor and other AI agents over
-> MCP](#use-with-claude--cursor), and measure retrieval quality on public
-> benchmarks ([results](#retrieval-quality)). A localhost web UI and PDF/DOCX
-> support are next (0.2). See the [roadmap](#roadmap) and the
+> MCP](#use-with-claude--cursor) or [in your browser](#web-ui), include
+> [PDF and DOCX files](#pdf-and-docx), and measure retrieval quality on
+> public benchmarks ([results](#retrieval-quality)). See the
+> [roadmap](#roadmap) and the
 > [changelog](https://github.com/searope/notelight/blob/main/CHANGELOG.md).
 
 ## Why
@@ -335,10 +337,11 @@ After changing Rust code, rebuild with `maturin develop --release`.
 | 4 | MCP server for AI agents | ✅ |
 | 5 | Web UI, PDF/DOCX, phrase ranking; tested wheels for 5 platforms | ✅ |
 | | First PyPI release ([0.1.0](https://pypi.org/project/notelight/0.1.0/)) | ✅ |
-| v2 | Same core compiled to WebAssembly, in-browser app | |
+| v2 | Same core compiled to WebAssembly, in-browser app | 🚧 [spike](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-spike-the-core-in-the-browser): search runs in the browser at native speed |
 
 ## Documentation
 
+- [How notelight works](https://github.com/searope/notelight/blob/main/docs/how-it-works.md): the whole pipeline, from a folder of notes to a cited result, with diagrams
 - [Design notes](https://github.com/searope/notelight/blob/main/docs/design-notes.md): why it is built this way
 - [Index format](https://github.com/searope/notelight/blob/main/docs/index-format.md): the on-disk layout, byte by byte
 - [Results](https://github.com/searope/notelight/blob/main/docs/results.md): retrieval quality and latency on BEIR, with the

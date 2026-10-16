@@ -1,0 +1,10 @@
+# `cargo test --target wasm32-unknown-unknown` runs test binaries with
+# wasm-bindgen-test-runner (from wasm-bindgen-cli, same version as the
+# wasm-bindgen crate), which executes them under Node.
+[target.wasm32-unknown-unknown]
+runner = "wasm-bindgen-test-runner"
+
+# The core's unit tests also run as wasm32-wasip1 under Node's built-in WASI.
+# `cargo test` runs from the package directory, hence the relative path.
+[target.wasm32-wasip1]
+runner = ["node", "../../scripts/wasi_run.mjs"]

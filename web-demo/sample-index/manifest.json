@@ -1,0 +1,23 @@
+{
+  "format": "notelight-index",
+  "schema_version": 2,
+  "created_by": "notelight-core 0.1.0",
+  "generation": 1,
+  "n_chunks": 180,
+  "dim": 0,
+  "embedder": null,
+  "bm25": {
+    "k1": 1.2,
+    "b": 0.75
+  },
+  "files": {
+    "bm25.bin": 139832,
+    "docs.bin": 155718
+  },
+  "metadata": {
+    "chunker": {
+      "max_chars": 1200
+    },
+    "source": "docs"
+  }
+}

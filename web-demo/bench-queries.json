@@ -1,0 +1,84 @@
+{
+ "queries": [
+  {
+   "text": "memory mapped files on windows",
+   "vector": null
+  },
+  {
+   "text": "how are generations swapped atomically",
+   "vector": null
+  },
+  {
+   "text": "reciprocal rank fusion",
+   "vector": null
+  },
+  {
+   "text": "ternary codes and int8 rescoring",
+   "vector": null
+  },
+  {
+   "text": "phrase ranking",
+   "vector": null
+  },
+  {
+   "text": "\"exact phrase\" quoted search",
+   "vector": null
+  },
+  {
+   "text": "bm25 parameters k1 b",
+   "vector": null
+  },
+  {
+   "text": "chunking markdown headings",
+   "vector": null
+  },
+  {
+   "text": "embedder identity",
+   "vector": null
+  },
+  {
+   "text": "pinned model revision sha-256",
+   "vector": null
+  },
+  {
+   "text": "mcp server read_context security",
+   "vector": null
+  },
+  {
+   "text": "lock file single writer",
+   "vector": null
+  },
+  {
+   "text": "schema version bump",
+   "vector": null
+  },
+  {
+   "text": "from_le_bytes validated offsets",
+   "vector": null
+  },
+  {
+   "text": "web ui localhost host header",
+   "vector": null
+  },
+  {
+   "text": "pdf docx extras",
+   "vector": null
+  },
+  {
+   "text": "numpy baseline int8 dot",
+   "vector": null
+  },
+  {
+   "text": "beir scifact nfcorpus fiqa results",
+   "vector": null
+  },
+  {
+   "text": "incremental indexer caches",
+   "vector": null
+  },
+  {
+   "text": "rust walkthrough borrow checker",
+   "vector": null
+  }
+ ]
+}

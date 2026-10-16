@@ -246,6 +246,9 @@ def test_evaluate_on_notes_reports_mrr_and_styles(notes_folder: Path, tmp_path: 
         for s in m.by_style:
             assert 0.0 <= s.ndcg <= 1.0 and 0.0 <= s.recall <= 1.0
     assert result.phrase_boost == 4.0
+    # Per-query scores are kept for paired comparisons, and average to the totals.
+    assert list(bm25.per_query) == list(ds.queries)
+    assert sum(s[0] for s in bm25.per_query.values()) / 4 == pytest.approx(bm25.ndcg)
 
     table = format_markdown([result])
     assert "notes-all MRR@10" in table and "notes-all by query style:" in table

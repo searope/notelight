@@ -92,6 +92,8 @@ class MethodResult:
     mrr: float = 0.0
     #: Per query style, for datasets that label styles, in query order.
     by_style: list[StyleResult] = field(default_factory=list)
+    #: Query id -> (nDCG, recall, MRR), for paired comparisons between runs.
+    per_query: dict[str, tuple[float, float, float]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -354,7 +356,7 @@ def evaluate(
             by_style.append(StyleResult(style, len(subset), *_means(subset)))
         ndcg, recall, mrr = _means(list(scores.values()))
         result.methods.append(
-            MethodResult(method, ndcg, recall, statistics.median(times), mrr, by_style)
+            MethodResult(method, ndcg, recall, statistics.median(times), mrr, by_style, scores)
         )
 
     if baseline:

@@ -73,7 +73,11 @@ jobs:
           cargo install wasm-bindgen-cli --version "$version" --locked
       - name: Core builds for the browser
         run: cargo build -p notelight-core --target wasm32-unknown-unknown
-      - run: cargo clippy -p notelight-core -p notelight-wasm --lib --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo clippy -p notelight-core --lib --target wasm32-unknown-unknown -- -D warnings
+      # All notelight-wasm targets, so the wasm-only tests/node.rs is linted too
+      # (it compiles to nothing natively). The core's tests and benches need
+      # native-only dev-dependencies.
+      - run: cargo clippy -p notelight-wasm --all-targets --target wasm32-unknown-unknown -- -D warnings
       # 32-bit usize: the core's unit tests as wasm32-wasip1 under Node's WASI.
       - name: Core unit tests as wasm32 (Node WASI)
         run: cargo test -p notelight-core --lib --target wasm32-wasip1

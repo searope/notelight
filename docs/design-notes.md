@@ -838,9 +838,9 @@ Embedding is the whole cost: the search adds about 0.2 ms on this index.
 Single-threaded WebAssembly is 2.8x slower than native ONNX Runtime on one
 thread (WebAssembly SIMD is 128 bits wide; native ONNX Runtime picks wider
 x86 kernels), and four threads bring it to native single-thread speed.
-Threads need a cross-origin isolated page (COOP and COEP headers), which
-`scripts/serve_demo.py --isolated` sends and GitHub Pages cannot set; the
-page uses 4 threads when it is isolated and one otherwise.
+Threads need a cross-origin isolated page (COOP and COEP headers). The page
+uses 4 threads when it is isolated and one otherwise; see "Threads without
+server headers" below for how it gets isolated on any host.
 
 | What the page loads | Raw | gzipped |
 |---|---|---|
@@ -856,3 +856,26 @@ registry often maps `.mjs` to `text/plain`, which browsers refuse to run as a
 module; onnxruntime-web ships as `.mjs`. `scripts/serve_demo.py` sets the
 types explicitly and can send the isolation headers. Like the CLI's web UI, it
 binds to 127.0.0.1 only.
+
+### Threads without server headers
+
+Static hosts such as GitHub Pages cannot send COOP and COEP, which would leave
+a deployed demo on one thread (29 ms per query). `web-demo/coi-sw.js` is a
+service worker that adds the two headers to this origin's responses and does
+nothing else: no caching, no body rewriting, and cross-origin requests pass
+through untouched (the model download is a CORS request, which COEP
+`require-corp` allows). A page becomes isolated only when its own navigation
+response carries the headers, so on the first visit `app.js` registers the
+worker and reloads once. A per-tab flag means it is tried at most once and can
+never loop, and where service workers or storage are unavailable the page
+simply runs on one thread. `?threads=1` skips it, for measuring.
+
+It is about 30 lines of our own rather than the common `coi-serviceworker`
+package, which also patches `window` and handles credentialless COEP; this
+page needs neither. Verified with headless Chrome 155 and a fresh profile
+against `serve_demo.py` without `--isolated`: the first load reloads once and
+is then isolated, the model downloads from the Hub, and the embedder runs on
+4 threads at 10.0 / 12.5 ms per query (median / p95, best of three), against
+28 ms with `?threads=1`. The Claude desktop app's browser pane, where the
+other numbers above were measured, does not run service workers, so there
+`--isolated` is still the way to get threads.

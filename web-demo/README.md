@@ -31,9 +31,12 @@ deletes it. An index built with another embedder is refused with the CLI's
 message and searched by keywords only; a keyword-only index never loads the
 model.
 
-`python scripts/serve_demo.py --isolated` sends the COOP and COEP headers
-that allow WebAssembly threads; the embedder then runs on 4 threads (about
-10 ms per query instead of 29 ms). Use `serve_demo.py` rather than
+The embedder runs on 4 threads (about 10 ms per query instead of 29 ms) when
+the page is cross-origin isolated. On a host that cannot send the COOP and
+COEP headers, such as GitHub Pages, the page registers `coi-sw.js`, a service
+worker that adds them, and reloads once on the first visit; `?threads=1`
+skips that. `python scripts/serve_demo.py --isolated` sends the headers
+itself, for browsers without service workers. Use `serve_demo.py` rather than
 `python -m http.server`, which on Windows often serves `.mjs` as
 `text/plain`, so the browser refuses to load onnxruntime-web.
 
@@ -44,6 +47,7 @@ that allow WebAssembly threads; the embedder then runs on 4 threads (about
 | `index.html`, `app.js`, `style.css` | the page |
 | `embed.js` | the query embedder: pinned model, SHA-256 checks, cache, CLS pooling |
 | `tokenizer.js` | bge-small's WordPiece tokenizer, ported from Hugging Face `tokenizers` |
+| `coi-sw.js` | service worker that adds the COOP/COEP headers, so threads work on static hosts |
 | `bench.js` | the latency benchmark behind the **Benchmark** button |
 | `bench-node.mjs` | the same benchmark under Node |
 | `bench-queries.json` | queries for the sample index |

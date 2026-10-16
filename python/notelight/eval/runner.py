@@ -8,7 +8,8 @@ Each BEIR document becomes one indexed chunk: its title is the heading path
 and its text is the chunk text, exactly as `notelight index` would store a
 section of a note. Documents longer than the model's 512 tokens are
 truncated by the embedder, as in the BEIR reference setup; BM25 sees the
-whole text.
+whole text. The notes benchmark (`notes.py`) is already chunked by the real
+chunker, and keeps each chunk's heading path and line range.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ from notelight.embed import Embedder
 from notelight.errors import IndexFormatError
 from notelight.eval.baseline import NumpyVectors
 from notelight.eval.datasets import Dataset
-from notelight.eval.metrics import mean, ndcg_at_k, overlap_at_k, recall_at_k
+from notelight.eval.metrics import mean, mrr_at_k, ndcg_at_k, overlap_at_k, recall_at_k
 from notelight.indexer import embedding_text
 
 __all__ = [
@@ -42,6 +43,7 @@ __all__ = [
     "DatasetResult",
     "MethodResult",
     "Progress",
+    "StyleResult",
     "evaluate",
 ]
 
@@ -67,6 +69,17 @@ _EMBED_BATCH = 256
 
 
 @dataclass(frozen=True)
+class StyleResult:
+    """Quality of one method on the queries of one style."""
+
+    style: str
+    queries: int
+    ndcg: float
+    recall: float
+    mrr: float
+
+
+@dataclass(frozen=True)
 class MethodResult:
     """Quality and speed of one method on one dataset."""
 
@@ -75,6 +88,12 @@ class MethodResult:
     recall: float
     #: Median time per query in milliseconds, search only (no embedding).
     latency_ms: float
+    #: Mean reciprocal rank of the first relevant result in the top k.
+    mrr: float = 0.0
+    #: Per query style, for datasets that label styles, in query order.
+    by_style: list[StyleResult] = field(default_factory=list)
+    #: Query id -> (nDCG, recall, MRR), for paired comparisons between runs.
+    per_query: dict[str, tuple[float, float, float]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -98,6 +117,8 @@ class DatasetResult:
     embedder: str
     k: int
     candidates: int
+    #: Hybrid bonus for query terms in order, as passed to `evaluate`.
+    phrase_boost: float = DEFAULT_PHRASE_BOOST
     methods: list[MethodResult] = field(default_factory=list)
     baseline: list[BaselineRow] = field(default_factory=list)
 
@@ -171,8 +192,8 @@ def _prepare(
     doc_vectors = _load_npy(doc_path, (n, dim))
     if doc_vectors is None:
         texts = [
-            embedding_text([title] if title else [], text)
-            for title, text in zip(dataset.titles, dataset.texts, strict=True)
+            embedding_text(heading_path, text)
+            for heading_path, text in zip(_heading_paths(dataset), dataset.texts, strict=True)
         ]
         doc_vectors = _embed_documents(texts, embedder, progress)
         _save_npy(doc_path, doc_vectors)
@@ -200,6 +221,12 @@ def _prepare(
     return reader, doc_vectors, query_vectors
 
 
+def _heading_paths(dataset: Dataset) -> list[list[str]]:
+    if dataset.heading_paths is not None:
+        return dataset.heading_paths
+    return [[title] if title else [] for title in dataset.titles]
+
+
 def _open_or_build_index(
     root: Path, dataset: Dataset, doc_vectors: F32, embedder: Embedder
 ) -> _core.IndexReader:
@@ -219,12 +246,22 @@ def _open_or_build_index(
         embedder.model_id,
         {"dataset": dataset.name, "fingerprint": dataset.fingerprint},
     )
-    for doc_id, title, text, vector in zip(
-        dataset.doc_ids, dataset.titles, dataset.texts, doc_vectors, strict=True
+    locations = dataset.locations or [(doc_id, 1, 1) for doc_id in dataset.doc_ids]
+    for (path, start, end), heading_path, text, vector in zip(
+        locations, _heading_paths(dataset), dataset.texts, doc_vectors, strict=True
     ):
-        writer.add(_core.ChunkRecord(doc_id, [title] if title else [], 1, 1, text), vector)
+        writer.add(_core.ChunkRecord(path, heading_path, start, end, text), vector)
     writer.commit(root)
     return _core.IndexReader.open(root)
+
+
+def _means(scores: list[tuple[float, float, float]]) -> tuple[float, float, float]:
+    """Mean nDCG, recall and MRR over per-query (nDCG, recall, MRR) triples."""
+    return (
+        mean([s[0] for s in scores]),
+        mean([s[1] for s in scores]),
+        mean([s[2] for s in scores]),
+    )
 
 
 def _timed(fn: Callable[..., list[int]], *args: Any) -> tuple[list[int], float]:
@@ -248,7 +285,7 @@ def evaluate(
     cache_dir: Path | None = None,
     progress: Progress | None = None,
 ) -> DatasetResult:
-    """Score `methods` on `dataset` with recall@k and nDCG@k.
+    """Score `methods` on `dataset` with recall@k, nDCG@k and MRR@k.
 
     `candidates` is the number of binary or ternary candidates re-scored with
     int8 codes, `depth` the number of results each retriever contributes
@@ -294,20 +331,32 @@ def evaluate(
         embedder=embedder.model_id,
         k=k,
         candidates=candidates,
+        phrase_boost=phrase_boost,
     )
     if not query_ids:
         return result
     for method in methods:
         run(method, 0)  # warm-up: page in the index
-        ndcgs, recalls, times = [], [], []
+        scores: dict[str, tuple[float, float, float]] = {}
+        times = []
         for qi, qid in enumerate(query_ids):
             ids, ms = _timed(run, method, qi)
-            ranked = [doc_ids[i] for i in ids]
-            ndcgs.append(ndcg_at_k(ranked, dataset.qrels[qid], k))
-            recalls.append(recall_at_k(ranked, dataset.qrels[qid], k))
+            relevant = dataset.qrels[qid]
+            ranked = dataset.judged_ranking([doc_ids[i] for i in ids], relevant)
+            scores[qid] = (
+                ndcg_at_k(ranked, relevant, k),
+                recall_at_k(ranked, relevant, k),
+                mrr_at_k(ranked, relevant, k),
+            )
             times.append(ms)
+        by_style = []
+        styles = dataset.query_styles
+        for style in dict.fromkeys(styles[q] for q in query_ids if q in styles):
+            subset = [s for q, s in scores.items() if styles.get(q) == style]
+            by_style.append(StyleResult(style, len(subset), *_means(subset)))
+        ndcg, recall, mrr = _means(list(scores.values()))
         result.methods.append(
-            MethodResult(method, mean(ndcgs), mean(recalls), statistics.median(times))
+            MethodResult(method, ndcg, recall, statistics.median(times), mrr, by_style, scores)
         )
 
     if baseline:

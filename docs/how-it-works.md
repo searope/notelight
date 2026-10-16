@@ -296,6 +296,12 @@ where BM25 is weak. It stays the default because notes, full of exact names
 and identifiers, look more like the first case, but the loss is reported as
 measured. The phrase rules move nDCG@10 by at most 0.002 at any weight.
 
+A small [notes benchmark](results.md#notes-benchmark) checks that case: 82
+short queries over this repository's docs, labelled by line range. On its
+held-out half BM25 (0.667 nDCG@10) is ahead of the embeddings (0.639), and
+hybrid scores highest (0.715). The phrase bonus is worth 0.02 to 0.03 there,
+on phrase and identifier queries.
+
 **Speed of the Rust core** (README, `cargo bench -p notelight-core`):
 criterion benchmarks on synthetic data, one thread, default x86-64 target
 (no AVX).

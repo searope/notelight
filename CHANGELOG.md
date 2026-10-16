@@ -23,6 +23,17 @@ format is detected and rebuilt by `notelight index`.
   on 1.
 - `scripts/serve_demo.py` serves the demo with correct `.mjs`/`.wasm` types
   (and, with `--isolated`, the headers WebAssembly threads need).
+- **Notes benchmark**: `notelight eval notes` scores every method on 82
+  short, note-style queries (keywords, identifiers and phrases, questions,
+  paraphrases) over this repository's docs, bundled with the package and
+  labelled by line range, so `--max-chars` can be swept. `--split tune`
+  (the default) is for choosing settings, `--split heldout` for reporting
+  them. On the held-out half hybrid search scores 0.715 nDCG@10, BM25
+  0.667 and vector search 0.639. A sweep of chunk size and phrase weight
+  changed no default ([results](docs/results.md#notes-benchmark)).
+- `notelight eval` reports MRR@10 next to nDCG@10 and recall@10, a
+  per-style table for datasets whose queries have styles, and per-query
+  scores in `--json`.
 
 ## [0.1.1] - 2026-10-16
 

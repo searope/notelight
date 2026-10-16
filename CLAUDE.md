@@ -33,7 +33,7 @@ crates/notelight-py/     thin PyO3 bindings -> python module notelight._core
 crates/notelight-py/src/ lib.rs, errors.rs (core Error -> Python exceptions), chunking.rs, index.rs
 crates/notelight-wasm/   wasm-bindgen bindings (v2): Index over in-memory files; tests/node.rs runs under Node
 python/notelight/        Python package: embed.py, ingest.py, documents.py (PDF/DOCX), indexer.py, search.py, paths.py, cli.py, mcp_server.py,
-                         download.py, eval/ (datasets, metrics, NumPy baseline, runner, report)
+                         download.py, eval/ (datasets, notes benchmark, metrics, NumPy baseline, runner, report)
                          web/ (`notelight serve`: FastAPI over NotesService + static/ page)
 scripts/                 make_demo_gif.py (README demo GIF from a real MCP session),
                          build_wasm.py (-> web-demo/pkg), vendor_ort.py (-> web-demo/vendor),
@@ -130,6 +130,14 @@ C++, x64/x86 build tools, Windows SDK).
   `vectors.bin` (schema version 2), computed from the int8 codes.
 - Open follow-up from the results: a vectorized `int8_dot` (NumPy BLAS wins
   the exhaustive int8 scan 5x).
+- The notes benchmark (`notelight eval notes`, data in
+  `python/notelight/eval/notes/`) is the check for note-style queries. Tune on
+  `--split tune`; run `--split heldout` once per decision, for settings chosen
+  beforehand. Never edit its labels after seeing results; add new queries in
+  a new version instead. Its corpus is pinned to commit `6a9d410`
+  (`scripts/make_notes_corpus.py --check`), so later doc edits do not move
+  the labels. Decisions and numbers are in `docs/design-notes.md`, "Notes
+  benchmark decisions".
 
 ## Milestone 4 notes (for whoever picks up M5)
 

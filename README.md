@@ -29,8 +29,9 @@ an upload. notelight keeps everything on your machine:
   phrase (`"lock file"`) to put exact matches first.
 - **Agent-ready.** An MCP server lets Claude, Copilot or Cursor search your notes
   and cite `path:line`.
-- **Measured.** `notelight eval` reports recall@10 and nDCG@10 on BEIR datasets
-  for every quantization setting, not just anecdotes.
+- **Measured.** `notelight eval` reports recall@10, nDCG@10 and MRR@10 on BEIR
+  datasets and on a labelled benchmark of note-style queries, for every
+  quantization setting, not just anecdotes.
 - **Private.** No telemetry, and no network after a one-time model download.
 
 ## Usage
@@ -80,7 +81,7 @@ re-run takes about as long as starting the CLI (0.5 s for the folder above).
 | `notelight status [<folder>] [--json]` | list indexed folders, sizes, embedders and generations |
 | `notelight mcp [-f <folder>]...` | run the MCP server over stdio for AI agents ([below](#use-with-claude--cursor)) |
 | `notelight serve [-f <folder>]... [--port 8765] [--open]` | search in your browser on localhost; needs `pip install "notelight[web]"` ([below](#web-ui)) |
-| `notelight eval [<dataset or folder>...] [--json]` | recall@10 and nDCG@10 of every retrieval method on BEIR datasets ([below](#retrieval-quality)) |
+| `notelight eval [<dataset or folder>...] [--json]` | recall@10, nDCG@10 and MRR@10 of every retrieval method on BEIR datasets, or on the bundled `notes` benchmark ([below](#retrieval-quality)) |
 | `notelight version` | versions and the data directory |
 
 Options:
@@ -305,8 +306,29 @@ exhaustive int8 scan by 1.3 to 1.7x (it was 5x before the int8 dot product
 was vectorized).
 Details and caveats are in [docs/results.md](https://github.com/searope/notelight/blob/main/docs/results.md).
 
+BEIR's long questions are not how people search notes, so a second,
+smaller benchmark is bundled: 82 short queries (keywords, identifiers and
+quoted phrases, questions, paraphrases) over this repository's own docs,
+labelled by line range, split into a tuning half and a held-out half. On the
+held-out half, with the defaults:
+
+| Method | nDCG@10 | MRR@10 |
+|---|---:|---:|
+| Ternary candidates + int8 rescore | 0.639 | 0.756 |
+| BM25 alone | 0.667 | 0.692 |
+| **Hybrid (`notelight search`)** | **0.715** | **0.769** |
+
+Here keywords matter more than on BEIR: BM25 beats the embeddings on both
+halves, and hybrid scores highest (its lead over the embeddings is clear;
+over BM25 alone it is within noise). A sweep of chunk size and phrase weight on the tuning
+half found nothing that held up on the held-out half, so the defaults stayed.
+The queries were written by an LLM and there are only 41 per half; the
+[notes benchmark section](https://github.com/searope/notelight/blob/main/docs/results.md#notes-benchmark)
+gives the method, the per-style results and the limits.
+
 ```powershell
 notelight eval                     # downloads 23 MB of data once; FiQA takes ~40 min to embed on a CPU
+notelight eval notes               # the notes benchmark (tuning half); bundled, nothing to download but the model
 ```
 
 ## Development
@@ -345,8 +367,8 @@ After changing Rust code, rebuild with `maturin develop --release`.
 - [How notelight works](https://github.com/searope/notelight/blob/main/docs/how-it-works.md): the whole pipeline, from a folder of notes to a cited result, with diagrams
 - [Design notes](https://github.com/searope/notelight/blob/main/docs/design-notes.md): why it is built this way
 - [Index format](https://github.com/searope/notelight/blob/main/docs/index-format.md): the on-disk layout, byte by byte
-- [Results](https://github.com/searope/notelight/blob/main/docs/results.md): retrieval quality and latency on BEIR, with the
-  Rust-vs-NumPy comparison
+- [Results](https://github.com/searope/notelight/blob/main/docs/results.md): retrieval quality and latency on BEIR and on the
+  notes benchmark, with the Rust-vs-NumPy comparison
 - Rust walkthroughs for readers coming from C# or Python:
   [milestone 0](https://github.com/searope/notelight/blob/main/docs/learning/m0-rust-walkthrough.md),
   [milestone 1](https://github.com/searope/notelight/blob/main/docs/learning/m1-rust-walkthrough.md),

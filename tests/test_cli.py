@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -65,6 +68,29 @@ def test_search_json_output(notes: Path) -> None:
     assert top["path"] == "rust/ownership.md"
     assert top["heading_path"] == ["Rust", "Ownership"]
     assert top["location"].startswith("rust/ownership.md:")
+
+
+@pytest.mark.parametrize("fmt", ["--json", "--text"])
+def test_search_writes_utf8_to_a_pipe_whatever_the_locale(tmp_path: Path, fmt: str) -> None:
+    # Regression: on Windows, piped output used the ANSI code page, so a note
+    # outside it crashed `notelight search > hits.txt`. PYTHONIOENCODING
+    # stands in for that code page on every OS.
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "kyoto.md").write_text("# 京都\n\nKyoto trip, bake at 250 °C.\n", encoding="utf-8")
+    _index(notes)
+    args = ["search", "kyoto", "-f", str(notes)] + (["--json"] if fmt == "--json" else [])
+    done = subprocess.run(
+        [sys.executable, "-m", "notelight.cli", *args],
+        capture_output=True,
+        env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+    )
+    assert done.returncode == 0, done.stderr.decode("utf-8", "replace")
+    out = done.stdout.decode("utf-8")  # strict: fails on cp1252 bytes
+    assert "京都" in out
+    assert "250 °C" in out
+    if fmt == "--json":
+        assert json.loads(out)["results"][0]["path"] == "kyoto.md"
 
 
 def test_search_uses_the_only_index_by_default(notes: Path) -> None:

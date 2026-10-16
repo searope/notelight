@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import codecs
+import io
 import json
 import os
 import platform
+import sys
 from pathlib import Path
 from typing import Annotated, NoReturn
 
@@ -63,9 +66,23 @@ def _embedder(name: str, offline: bool) -> Embedder | None:
     return make_embedder(name, offline=offline, on_download=_on_download)
 
 
+def _utf8_output() -> None:
+    """Write UTF-8 to pipes and files, on every OS.
+
+    On Windows, Python encodes redirected output in the ANSI code page
+    (cp1252 and the like), so `notelight search > hits.txt` crashed on a note
+    with a character outside it, and `--json` was not UTF-8 as JSON requires.
+    A console is unaffected: Python already writes Unicode to it.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper) and codecs.lookup(stream.encoding).name != "utf-8":
+            stream.reconfigure(encoding="utf-8", errors=stream.errors)
+
+
 @app.callback()
 def main() -> None:
     """notelight command-line interface."""
+    _utf8_output()
 
 
 @app.command()

@@ -5,6 +5,7 @@ __pycache__/
 *.pyd
 *.pdb
 .venv/
+.venv310/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

@@ -460,7 +460,7 @@ dependencies = [
 
 [[package]]
 name = "notelight-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "memmap2",
@@ -473,7 +473,7 @@ dependencies = [
 
 [[package]]
 name = "notelight-py"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "notelight-core",
  "numpy",
@@ -483,7 +483,7 @@ dependencies = [
 
 [[package]]
 name = "notelight-wasm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "js-sys",
  "notelight-core",

@@ -8,6 +8,11 @@ format is detected and rebuilt by `notelight index`.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-16
+
+A bug-fix release of the Python package. The WebAssembly crate below lives in
+the repository; it is not published to PyPI or npm yet.
+
 ### Added
 
 - **v2 spike: the core in the browser.** `notelight-wasm` (wasm-bindgen
@@ -121,5 +126,6 @@ regression test:
 - Changing the chunk size no longer empties the file cache before the new
   generation commits.
 
-[Unreleased]: https://github.com/searope/notelight/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/searope/notelight/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/searope/notelight/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/searope/notelight/releases/tag/v0.1.0

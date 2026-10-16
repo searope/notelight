@@ -62,7 +62,10 @@ def main() -> None:
 @app.command()
 def index(
     folder: Annotated[
-        Path, typer.Argument(help="Folder of Markdown and text files to index.", show_default=False)
+        Path,
+        typer.Argument(
+            help="Folder of Markdown, text, PDF and DOCX files to index.", show_default=False
+        ),
     ],
     embedder: EmbedderOpt = None,
     offline: OfflineOpt = False,
@@ -190,7 +193,8 @@ def search(
         return
     for n, r in enumerate(results, 1):
         heading = " > ".join(r.heading_path)
-        typer.secho(f"{n:>2}. {r.location}", fg=typer.colors.CYAN, nl=False)
+        where = f"{r.location} ({r.pages})" if r.pages else r.location
+        typer.secho(f"{n:>2}. {where}", fg=typer.colors.CYAN, nl=False)
         typer.echo(f"  {heading}" if heading else "")
         typer.echo(f"    {snippet(r.text)}")
 

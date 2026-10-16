@@ -47,17 +47,7 @@ fn one_hot(i: usize, dim: usize) -> Vec<f32> {
 }
 
 fn write_index(root: &std::path::Path, dim: usize) -> index::CommitInfo {
-    let mut w = IndexWriter::new(WriterOptions {
-        dim,
-        embedder: (dim > 0).then(|| "test-onehot".to_string()),
-        metadata: BTreeMap::from([("source".into(), serde_json::json!("fixtures"))]),
-        ..Default::default()
-    });
-    for (i, r) in corpus().iter().enumerate() {
-        let emb = (dim > 0).then(|| one_hot(i, dim));
-        w.add(r, emb.as_deref()).unwrap();
-    }
-    w.commit(root).unwrap()
+    filled_writer(dim).commit(root).unwrap()
 }
 
 #[test]
@@ -138,6 +128,65 @@ fn from_parts_matches_disk() {
     )
     .unwrap();
     assert_eq!(r.search_bm25("apt", 1)[0].0, 1);
+}
+
+/// A writer filled with the corpus, not yet committed.
+fn filled_writer(dim: usize) -> IndexWriter {
+    let mut w = IndexWriter::new(WriterOptions {
+        dim,
+        embedder: (dim > 0).then(|| "test-onehot".to_string()),
+        metadata: BTreeMap::from([("source".into(), serde_json::json!("fixtures"))]),
+        ..Default::default()
+    });
+    for (i, r) in corpus().iter().enumerate() {
+        let emb = (dim > 0).then(|| one_hot(i, dim));
+        w.add(r, emb.as_deref()).unwrap();
+    }
+    w
+}
+
+#[test]
+fn build_in_memory_matches_commit() {
+    // The browser build has no filesystem: it builds and opens generations
+    // from bytes. Those bytes must be exactly what `commit` writes.
+    let dir = tempfile::tempdir().unwrap();
+    let info = filled_writer(16).commit(dir.path()).unwrap();
+    let built = filled_writer(16).build(info.generation).unwrap();
+    let read = |name: &str| fs::read(info.dir.join(name)).unwrap();
+    assert_eq!(built.docs, read(index::DOCS_FILE));
+    assert_eq!(built.bm25, read(index::BM25_FILE));
+    assert_eq!(
+        built.vectors.as_deref(),
+        Some(&read(index::VECTORS_FILE)[..])
+    );
+    let on_disk: serde_json::Value = serde_json::from_slice(&read(index::MANIFEST_FILE)).unwrap();
+    let in_memory: serde_json::Value =
+        serde_json::from_slice(&built.manifest.to_json().unwrap()).unwrap();
+    assert_eq!(on_disk, in_memory);
+
+    let r = IndexReader::from_parts(
+        &built.manifest.to_json().unwrap(),
+        built.docs,
+        built.bm25,
+        built.vectors,
+    )
+    .unwrap();
+    assert_eq!(r.search_bm25("winget", 1)[0].0, 0);
+}
+
+#[test]
+fn from_parts_checks_sizes_against_manifest() {
+    let built = filled_writer(0).build(1).unwrap();
+    let manifest = built.manifest.to_json().unwrap();
+    let mut short_docs = built.docs.clone();
+    short_docs.pop();
+    let err = IndexReader::from_parts(&manifest, short_docs, built.bm25.clone(), None).unwrap_err();
+    assert!(err.to_string().contains("docs.bin"), "{err}");
+
+    // Vectors handed to a keyword-only manifest have no recorded size.
+    let err =
+        IndexReader::from_parts(&manifest, built.docs, built.bm25, Some(vec![0; 64])).unwrap_err();
+    assert!(err.to_string().contains("vectors.bin"), "{err}");
 }
 
 #[test]

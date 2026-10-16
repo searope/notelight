@@ -513,3 +513,140 @@ change BEIR slightly even at weight 0, because 33 of FiQA's 648 test queries
 contain quotes (`Why is “cheque cashing” a legitimate business?`), and those
 now act as phrases. See `docs/results.md`.
 
+
+## v2 spike: the core in the browser
+
+The spike answers one question before the browser app is built: does
+`notelight-core` run in WebAssembly, unchanged, at native speed? It does. The
+pieces are `crates/notelight-wasm` (the bindings), `web-demo/` (a static page
+that loads an index and searches it client-side), and a `wasm` CI job.
+
+### The core needed no changes to compile
+
+`cargo build -p notelight-core --target wasm32-unknown-unknown` worked
+before the spike started: the M1 rule of no Python, ML or async dependencies,
+and memmap2 behind `cfg(not(target_arch = "wasm32"))`, had already done the
+work. Two small additions make the browser path first-class rather than
+incidental:
+
+- `IndexWriter::build(generation)` returns a generation's files as bytes
+  (`GenerationFiles`); `commit` now calls it and writes them. A browser has no
+  filesystem, so the future app will build indexes in memory and keep the
+  bytes in IndexedDB or OPFS. A test checks that `build` produces exactly the
+  bytes `commit` writes.
+- `IndexReader::from_parts` checks each file's size against the manifest, as
+  `open_generation` always did. Bytes from a directory picker or `fetch` are
+  as untrusted as bytes on disk.
+
+The std filesystem calls still compile on `wasm32-unknown-unknown` (they
+return errors at run time), so no `cfg` was added to the core: the reader
+and writer that touch disk are simply not called from the browser.
+
+### Tests run as WebAssembly, two ways
+
+- **The JS API, under Node.** `crates/notelight-wasm/tests/node.rs` uses
+  `wasm-bindgen-test`; `.cargo/config.toml` makes `wasm-bindgen-test-runner`
+  the runner for `wasm32-unknown-unknown`, so `cargo test --target
+  wasm32-unknown-unknown -p notelight-wasm --test node` runs the real module in
+  Node against the committed sample index. It checks what JavaScript sees:
+  plain arrays and objects, `camelCase` fields, `null` (not `undefined`) for a
+  missing rank, and exceptions for errors.
+- **The core's unit tests, as wasm32.** `wasm-bindgen-test-runner` only runs
+  `#[wasm_bindgen_test]` functions, and annotating the core's 60 `#[test]`s
+  for it would put browser concerns into the core. Instead they run on
+  `wasm32-wasip1` under Node's built-in WASI (`scripts/wasi_run.mjs` is the
+  runner). That target shares what matters with the browser one: a 32-bit
+  `usize`, which is where layout math and `u64` offset conversions could
+  break. Proptest, tempfile and criterion are native-only dev-dependencies, so
+  the integration and property tests stay native.
+
+### `cargo build` plus `wasm-bindgen`, not wasm-pack
+
+wasm-pack wraps the same two steps and adds npm packaging this project does not
+need yet; it also downloads tools at build time, and its maintenance has been
+uncertain since the rustwasm GitHub organization was wound down in 2025.
+Running them directly from `scripts/build_wasm.py` keeps the build visible: compile to
+`.wasm`, then `wasm-bindgen --target web` writes the ES module glue and
+TypeScript types. The one sharp edge is that the CLI must match the
+`wasm-bindgen` crate version exactly; the script reads the version from
+`Cargo.lock` and refuses a mismatch with the install command, and CI installs
+that same version. `--target web` produces a plain ES module, so the demo
+loads it with `<script type="module">` and no bundler.
+
+### Size
+
+| Build (`wasm-release` profile) | .wasm | gzipped |
+|---|---|---|
+| opt-level 3, thin LTO | 298 KiB | 110 KiB |
+| opt-level 3, fat LTO, stripped (**chosen**) | 245 KiB | 102 KiB |
+| opt-level "s", fat LTO, stripped | 216 KiB | 84 KiB |
+| opt-level "z", fat LTO, stripped | 203 KiB | 80 KiB |
+| opt-level 3 with `+simd128` | 245 KiB | 102 KiB |
+
+"s" was 25% slower on vector search in Node, for 18 KiB gzipped. Enabling
+`simd128` changed nothing measurable: the hot loops (`int8_dot`, popcount over
+`u64` words) are not auto-vectorized into WASM SIMD, so it would take explicit
+`core::arch::wasm32` intrinsics, which is the same open question as the M3
+"vectorized `int8_dot`" follow-up. `wasm-opt` (Binaryen) is not used yet.
+
+### Latency: native and WebAssembly are within noise
+
+Measured on an i9-10900K (Windows 11), k = 10, the same index files and
+queries everywhere, through the same `Index` type: natively by
+`cargo run --release -p notelight-wasm --example latency`, in Node by
+`web-demo/bench-node.mjs`, and in Chrome 152 by the demo's Benchmark button
+(`web-demo/bench.js`). Each query runs 5 to 200 times in a row and its time is
+the mean (browsers coarsen `performance.now()` to 0.1 ms); the table gives the
+median and p95 over queries, best of three runs, all measured in one sitting
+because background load moved single runs by up to 2x.
+
+**FiQA** (57,638 chunks, 104 MiB with 384-d bge-small vectors; 200 test
+queries with their cached embeddings):
+
+| | native | wasm, Node 25 | wasm, Chrome 152 |
+|---|---|---|---|
+| open from bytes in memory | 5.5 ms | 33 ms | 70 ms |
+| BM25 | 236 / 591 µs | 285 / 638 µs | 280 / 620 µs |
+| hybrid, text only | 343 / 1032 µs | 349 / 873 µs | 360 / 900 µs |
+| hybrid, text + vector | 1458 / 2348 µs | 1344 / 2156 µs | 1440 / 2400 µs |
+
+**This repository's docs** (the committed sample, 132 chunks; 20 queries in
+`web-demo/bench-queries.json`):
+
+| | native | wasm, Node 25 | wasm, Chrome 152 |
+|---|---|---|---|
+| BM25 | 2.8 / 4.0 µs | 9.6 / 48.6 µs | 3.5 / 4.5 µs |
+| hybrid, text only | 32 / 94 µs | 48 / 177 µs | 26 / 81 µs |
+
+Search is as fast in the browser as natively, including vector search
+without SIMD. On a tiny index each call pays a few microseconds to cross
+into WebAssembly and build the result objects, which is invisible next to
+the ~5 ms it takes to embed a query. Opening is slower because the browser
+copies the files into WebAssembly memory (the native reader here also owns
+its bytes; with mmap it would not copy at all); 70 ms for 104 MiB is paid
+once per page load.
+
+### What the browser app needs next
+
+- **Query embeddings in the browser.** bge-small through onnxruntime-web
+  (WASM or WebGPU backend) or transformers.js, with the same pinned revision
+  and SHA-256 checks as `embed.py`, and a test that its vectors match the
+  Python embedder's within int8 quantization error. `model_id` must match, or
+  the index refuses the query as it does today.
+- **Indexing in the browser.** `chunk_text`, `IndexWriter::build` and the
+  embedder are enough to build a generation from files the user picks
+  (File System Access API where available, `<input webkitdirectory>`
+  elsewhere). PDF and DOCX need JS-side text extraction (pdf.js) or are left
+  out at first.
+- **Storage.** Keep generations in OPFS (or IndexedDB), with the same
+  immutable-generation idea: write a new one, then switch a pointer. An
+  incremental rebuild needs the per-file cache the Python indexer keeps in
+  SQLite, as a small JSON or IndexedDB table.
+- **A worker.** Opening 100 MiB and embedding block the main thread; run the
+  core and the model in a Web Worker and pass results by `postMessage`.
+- **Memory.** wasm32 linear memory is limited to 4 GiB and only grows. Large
+  indexes may want docs.bin kept outside WebAssembly memory (in JS, fetched per
+  hit), which needs a `Docs` that reads through a callback.
+- **The TypeScript app itself**, with the types `wasm-bindgen` generates
+  (`notelight_wasm.d.ts`), and a deploy (GitHub Pages) built in CI by
+  `scripts/build_wasm.py`.

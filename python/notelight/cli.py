@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -15,7 +16,15 @@ from notelight import paths
 from notelight.embed import EMBEDDER_NAMES, Embedder, ModelFile, make_embedder, name_for_model_id
 from notelight.errors import IndexNotFoundError, NotelightError
 from notelight.indexer import SyncStats, sync
-from notelight.search import IndexInfo, Searcher, describe_index, list_indexes, snippet
+from notelight.search import (
+    IndexInfo,
+    Searcher,
+    describe_index,
+    list_indexes,
+    match_spans,
+    query_terms,
+    snippet,
+)
 
 app = typer.Typer(
     name="notelight",
@@ -197,12 +206,25 @@ def search(
     if not results:
         typer.echo("No results.")
         return
+    # Colour only on a terminal (click strips it from pipes), and never with NO_COLOR.
+    color = False if os.environ.get("NO_COLOR") else None
+    terms = query_terms(query)
     for n, r in enumerate(results, 1):
-        heading = " > ".join(r.heading_path)
+        heading = _highlight(" > ".join(r.heading_path), terms)
         where = f"{r.location} ({r.pages})" if r.pages else r.location
-        typer.secho(f"{n:>2}. {where}", fg=typer.colors.CYAN, nl=False)
-        typer.echo(f"  {heading}" if heading else "")
-        typer.echo(f"    {snippet(r.text)}")
+        typer.secho(f"{n:>2}. {where}", fg=typer.colors.CYAN, nl=False, color=color)
+        typer.echo(f"  {heading}" if heading else "", color=color)
+        typer.echo(f"    {_highlight(snippet(r.text, terms=terms), terms)}", color=color)
+
+
+def _highlight(text: str, terms: frozenset[str]) -> str:
+    """`text` with the words matching the query in bold yellow."""
+    parts, last = [], 0
+    for start, end in match_spans(text, terms):
+        parts += [text[last:start], typer.style(text[start:end], fg=typer.colors.YELLOW, bold=True)]
+        last = end
+    parts.append(text[last:])
+    return "".join(parts)
 
 
 def _print_info(i: IndexInfo) -> None:

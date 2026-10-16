@@ -64,6 +64,14 @@ fn hamming(a: PyReadonlyArray1<'_, u8>, b: PyReadonlyArray1<'_, u8>) -> PyResult
     Ok(quant::hamming(a, b))
 }
 
+/// Split `text` into the terms BM25 indexes: lowercase, split on
+/// non-alphanumerics and at `camelCase` boundaries (plus the whole
+/// identifier), with stopwords and single letters dropped.
+#[pyfunction]
+fn tokenize(text: &str) -> Vec<String> {
+    notelight_core::tokenize::tokenize(text)
+}
+
 /// The compiled Rust extension module.
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -73,6 +81,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("VECTOR_MODES", modes)?;
     m.add_function(wrap_pyfunction!(quantize_binary, m)?)?;
     m.add_function(wrap_pyfunction!(hamming, m)?)?;
+    m.add_function(wrap_pyfunction!(tokenize, m)?)?;
     m.add_function(wrap_pyfunction!(chunking::chunk_text, m)?)?;
     m.add_function(wrap_pyfunction!(index::index_exists, m)?)?;
     m.add_class::<chunking::PyChunk>()?;

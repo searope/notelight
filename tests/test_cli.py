@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+import typer
 from typer.testing import CliRunner
 
 import notelight
@@ -36,6 +38,22 @@ def test_search_human_output(notes: Path) -> None:
     assert result.exit_code == 0, result.output
     first_line = result.output.splitlines()[0]
     assert "recipes/bread.txt:" in first_line
+
+
+def test_search_highlights_query_words(notes: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _index(notes)
+    args = ["search", "sourdough starter", "-f", str(notes), "-k", "1"]
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    colored = runner.invoke(app, args, color=True).output
+    mark = typer.style("Sourdough", fg=typer.colors.YELLOW, bold=True)
+    assert mark in colored
+    assert typer.style("starter", fg=typer.colors.YELLOW, bold=True) in colored
+    assert typer.style("bread", fg=typer.colors.YELLOW, bold=True) not in colored
+    # Piped output (no terminal) and NO_COLOR get plain text.
+    plain = runner.invoke(app, args).output
+    assert "\x1b[" not in plain and "Sourdough bread" in plain
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert "\x1b[" not in runner.invoke(app, args, color=True).output
 
 
 def test_search_json_output(notes: Path) -> None:

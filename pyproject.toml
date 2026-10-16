@@ -45,6 +45,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["maturin>=1.8,<2", "pytest>=8", "anyio>=4", "ruff>=0.6", "mypy>=1.11"]
+# PDF and DOCX ingest (0.2). Pure-Python, permissively licensed readers.
+pdf = ["pypdf>=5"]
+docx = ["python-docx>=1.1"]
+documents = ["notelight[pdf,docx]"]
 
 [project.scripts]
 notelight = "notelight.cli:app"
@@ -84,6 +88,12 @@ mypy_path = "python"
 
 [[tool.mypy.overrides]]
 module = ["onnxruntime", "onnxruntime.*"]
+ignore_missing_imports = true
+
+# Optional extras: type-checked when installed (CI installs them), and not
+# an error when a dev environment leaves them out.
+[[tool.mypy.overrides]]
+module = ["pypdf", "pypdf.*", "docx", "docx.*"]
 ignore_missing_imports = true
 
 [tool.ruff.lint.isort]

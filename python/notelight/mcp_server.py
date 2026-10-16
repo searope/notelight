@@ -14,7 +14,9 @@ generation. Tools run in worker threads; the Rust search releases the GIL.
 
 `read_context` reads only files that the index already covers: the path
 must appear in the index's file list, so `..`, absolute paths elsewhere,
-hidden and ignored files are all refused.
+hidden and ignored files are all refused. PDF and DOCX files are served as
+the text the indexer extracted from them (the same extraction, so citation
+line numbers match), with the PDF pages the returned lines are on.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from __future__ import annotations
 import os
 import re
 import threading
+from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath
 
@@ -33,16 +36,17 @@ from mcp_types import ToolAnnotations
 from pydantic import BaseModel, Field
 
 import notelight
-from notelight import _core, paths
+from notelight import _core, documents, paths
 from notelight.embed import Embedder, make_embedder, name_for_model_id
 from notelight.errors import NotelightError
 from notelight.indexer import CORE_DIR
-from notelight.ingest import MAX_FILE_BYTES, decode
+from notelight.ingest import DOCUMENT_SUFFIXES, max_bytes
 from notelight.search import (
     IndexInfo,
     Searcher,
     check_staleness,
     describe_index,
+    format_pages,
     indexed_files,
     indexed_folders,
     list_indexes,
@@ -67,14 +71,19 @@ __all__ = [
 MAX_CONTEXT_LINES = 400
 #: Most results `search` returns in one call.
 MAX_K = 50
+#: Extracted PDF/DOCX texts kept between `read_context` calls.
+EXTRACT_CACHE_SIZE = 8
 
 #: Builds the query embedder for an index's embedder id (None: keyword-only).
 EmbedderFactory = Callable[[str | None], Embedder | None]
 
 INSTRUCTIONS = """\
-notelight searches the user's own indexed notes and documents (Markdown and text).
-Use `search` first; every result has a `location` like `notes/rust.md:12-30`
-(path relative to its folder, then the line range). Cite locations in answers.
+notelight searches the user's own indexed notes and documents (Markdown, text,
+and PDF/DOCX when installed). Use `search` first; every result has a `location`
+like `notes/rust.md:12-30` (path relative to its folder, then the line range).
+Cite locations in answers. For PDF and DOCX files the lines are those of the
+extracted text, and PDF hits also carry `pages` (for example `p. 3`): cite both,
+as in `report.pdf:40-52 (p. 3)`.
 Use `read_context` with a location to read the surrounding lines from disk.
 `list_sources` shows which folders are searchable; `index_status` shows whether an
 index is out of date (the user refreshes it with `notelight index <folder>`).
@@ -93,10 +102,18 @@ class SearchHit(BaseModel):
     location: str = Field(description="Citation: `path:line_start-line_end`.")
     folder: str = Field(description="The indexed folder the file belongs to.")
     path: str = Field(description="File path relative to `folder`, `/`-separated.")
-    line_start: int = Field(description="First line of the chunk (1-based).")
+    line_start: int = Field(
+        description="First line of the chunk (1-based); for PDF and DOCX, a line of the "
+        "extracted text."
+    )
     line_end: int = Field(description="Last line of the chunk (inclusive).")
     heading_path: list[str] = Field(description="Markdown headings above the chunk.")
     snippet: str = Field(description="The start of the chunk text, on one line.")
+    pages: str | None = Field(
+        default=None, description="PDF pages of the chunk (`p. 3`, `pp. 3-4`); null otherwise."
+    )
+    page_start: int | None = Field(default=None, description="First PDF page (1-based).")
+    page_end: int | None = Field(default=None, description="Last PDF page (inclusive).")
     score: float = Field(
         description="Fused (RRF) score within its folder's index; higher is better. "
         "Not comparable across folders."
@@ -131,6 +148,11 @@ class FileContext(BaseModel):
     line_end: int = Field(description="Last returned line (inclusive).")
     total_lines: int = Field(description="Number of lines in the file.")
     truncated: bool = Field(description=f"True if the range was cut to {MAX_CONTEXT_LINES} lines.")
+    pages: str | None = Field(
+        default=None, description="PDF pages of the returned lines; null for other files."
+    )
+    page_start: int | None = None
+    page_end: int | None = None
     text: str
 
 
@@ -230,6 +252,7 @@ class NotesService:
         self._lock = threading.Lock()
         self._searchers: dict[Path, Searcher] = {}
         self._embedders: dict[str | None, Embedder | None] = {}
+        self._extracted: OrderedDict[tuple[str, int, int], str] = OrderedDict()
 
     # -- folders -------------------------------------------------------------
     def sources(self) -> list[IndexInfo]:
@@ -354,6 +377,9 @@ class NotesService:
                 line_end=r.line_end,
                 heading_path=r.heading_path,
                 snippet=snippet(r.text),
+                pages=r.pages,
+                page_start=r.page_start,
+                page_end=r.page_end,
                 score=r.score,
             )
             for r in results
@@ -375,19 +401,8 @@ class NotesService:
             raise ToolError("context must be between 0 and 100")
         rel, start, end = _parse_location(location)
         root, rel = self._indexed_file(rel, folder)
-        path = root / rel
-        try:
-            if path.stat().st_size > MAX_FILE_BYTES:
-                raise ToolError(f"{rel} is larger than {MAX_FILE_BYTES} bytes")
-            decoded = decode(path.read_bytes())
-        except OSError as e:
-            raise ToolError(
-                f"cannot read {rel}: {e.strerror or e}; it may have been moved or deleted "
-                "since it was indexed"
-            ) from e
-        if decoded.text is None:
-            raise ToolError(f"cannot read {rel}: {decoded.skip_reason}")
-        lines = decoded.text.split("\n")
+        text = self._file_text(root / rel, rel)
+        lines = text.split("\n")
         if lines and lines[-1] == "":
             lines.pop()  # a final newline does not start another line
         total = len(lines)
@@ -400,6 +415,9 @@ class NotesService:
             last = min(total, (end if end is not None else start) + context)
         truncated = last - first + 1 > MAX_CONTEXT_LINES or (start is None and total > last)
         last = min(last, first + MAX_CONTEXT_LINES - 1)
+        page_start = page_end = None
+        if rel.lower().endswith(".pdf"):
+            page_start, page_end = documents.page_range(documents.page_starts(text), first, last)
         return FileContext(
             location=f"{rel}:{first}-{last}",
             folder=str(root),
@@ -408,8 +426,46 @@ class NotesService:
             line_end=last,
             total_lines=total,
             truncated=truncated,
-            text="\n".join(lines[first - 1 : last]),
+            pages=format_pages(page_start, page_end),
+            page_start=page_start,
+            page_end=page_end,
+            # Page breaks are markers, not content.
+            text="\n".join(lines[first - 1 : last]).replace(documents.PAGE_BREAK, ""),
         )
+
+    def _file_text(self, path: Path, rel: str) -> str:
+        """The indexed text of a file: decoded, or extracted for PDF and DOCX.
+
+        Extractions are cached by path, size and mtime, so paging through a
+        long PDF does not parse it once per call.
+        """
+        suffix = path.suffix.lower()
+        missing = documents.missing_extra(suffix)
+        if missing is not None:
+            raise ToolError(f"cannot read {rel}: {missing}")
+        try:
+            st = path.stat()
+            if st.st_size > max_bytes(suffix):
+                raise ToolError(f"{rel} is larger than {max_bytes(suffix)} bytes")
+            key = (str(path), st.st_size, st.st_mtime_ns)
+            with self._lock:
+                cached = self._extracted.get(key)
+            if cached is not None:
+                return cached
+            decoded = documents.load_text(suffix, path.read_bytes())
+        except OSError as e:
+            raise ToolError(
+                f"cannot read {rel}: {e.strerror or e}; it may have been moved or deleted "
+                "since it was indexed"
+            ) from e
+        if decoded.text is None:
+            raise ToolError(f"cannot read {rel}: {decoded.skip_reason}")
+        if suffix in DOCUMENT_SUFFIXES:
+            with self._lock:
+                self._extracted[key] = decoded.text
+                while len(self._extracted) > EXTRACT_CACHE_SIZE:
+                    self._extracted.popitem(last=False)
+        return decoded.text
 
     def _indexed_file(self, rel: str, folder: str | None) -> tuple[Path, str]:
         """The served folder and indexed relative path that `rel` names.

@@ -88,7 +88,8 @@ Options:
   embedder the index was built with, and `search` uses it automatically and
   refuses a different one.
 - `--offline`: never download; fail if the model is not cached.
-- Files: `.md`, `.markdown` and `.txt`, in UTF-8 or Windows-1252. Hidden
+- Files: `.md`, `.markdown` and `.txt`, in UTF-8 or Windows-1252, plus
+  `.pdf` and `.docx` with the optional extras ([below](#pdf-and-docx)). Hidden
   folders (`.git`, `.obsidian`, ...), `node_modules`, `target`, `build` and
   similar are skipped, as is anything matched by a `.notelightignore` file
   (`.gitignore` syntax) in the folder root.
@@ -107,6 +108,32 @@ for hit in Searcher("~/notes", embedder).search("release hotfixes", k=5):
     print(hit.location, hit.heading_path)
 ```
 
+### PDF and DOCX
+
+PDF and DOCX support is optional, so the base install stays small:
+
+```bash
+pip install "notelight[pdf]"        # pypdf
+pip install "notelight[docx]"       # python-docx
+pip install "notelight[documents]"  # both
+```
+
+Without the extra, these files are listed as skipped with the reason
+(`install notelight[pdf]`), and the next `notelight index` after installing
+it picks them up. Encrypted (password-protected), scanned or image-only and
+damaged PDFs are skipped with a reason; notelight does no OCR.
+
+Citations work as for text files, with line numbers counted in the extracted
+text, which `read_context` serves to agents. PDF hits also name their pages,
+and DOCX headings (Heading 1-6) become heading paths:
+
+```console
+ 1. papers/report.pdf:41-52 (p. 3)
+    Glaciers retreat as summers warm…
+ 2. trips/alps.docx:9-15  Mountains > Huts
+    Refuge | 2800 m…
+```
+
 ## Use with Claude / Cursor
 
 `notelight mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
@@ -116,7 +143,7 @@ read-only tools:
 | Tool | What it returns |
 |---|---|
 | `search(query, k=10, folder=None)` | hits with `location` (`path:line_start-line_end`), heading path, snippet and score; all indexed folders when `folder` is omitted |
-| `read_context(location, context=5, folder=None)` | the cited lines plus `context` lines around them, read from disk |
+| `read_context(location, context=5, folder=None)` | the cited lines plus `context` lines around them, read from disk (PDF and DOCX as extracted text, with PDF pages) |
 | `list_sources()` | the indexed folders, with file and chunk counts |
 | `index_status(folder=None)` | generation, chunks, embedder, size, and whether files changed since the last `notelight index` |
 

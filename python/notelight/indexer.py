@@ -31,10 +31,10 @@ import filelock
 import numpy as np
 import numpy.typing as npt
 
-from notelight import _core, paths
+from notelight import _core, documents, paths
 from notelight.embed import Embedder
 from notelight.errors import IndexBusyError
-from notelight.ingest import SourceFile, decode, walk
+from notelight.ingest import SourceFile, walk
 
 __all__ = [
     "CACHE_FILE",
@@ -76,6 +76,10 @@ CREATE TABLE IF NOT EXISTS chunks (
     line_end     INTEGER NOT NULL,
     text         TEXT NOT NULL,
     PRIMARY KEY (doc_key, ord)
+);
+CREATE TABLE IF NOT EXISTS pages (
+    doc_key TEXT PRIMARY KEY,
+    starts  TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS embeddings (key TEXT PRIMARY KEY, vector BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS skipped (
@@ -193,9 +197,21 @@ def _open_cache(index_dir: Path, chunker: str) -> sqlite3.Connection:
     return db
 
 
-def _doc_key(content_sha: str, markdown: bool) -> str:
-    # The same bytes chunk differently as .md and .txt, so the mode is part of the key.
-    return f"{content_sha}:{'md' if markdown else 'txt'}"
+def _doc_key(content_sha: str, mode: str) -> str:
+    # The same bytes chunk differently as .md and .txt, and a document's text
+    # depends on the extractor, so the mode is part of the key.
+    return f"{content_sha}:{mode}"
+
+
+def _reuse_skip(f: SourceFile, reason: str) -> bool:
+    """Whether a file skipped earlier for `reason` is still skipped unread.
+
+    A file skipped because an extra was missing is read again once the extra
+    is installed, even though the file itself did not change.
+    """
+    return not documents.is_missing_extra_reason(reason) or (
+        documents.missing_extra(f.suffix) is not None
+    )
 
 
 def _scan(
@@ -228,19 +244,31 @@ def _scan(
             docs.append(_Doc(f, prior[2]))
             continue
         prior_skip = known_skipped.get(f.rel_path)
-        if prior_skip is not None and prior_skip[:2] == (f.size, f.mtime_ns):
+        if (
+            prior_skip is not None
+            and prior_skip[:2] == (f.size, f.mtime_ns)
+            and _reuse_skip(f, prior_skip[2])
+        ):
             skip(f, prior_skip[2])  # unchanged since it was last rejected
+            continue
+        missing = documents.missing_extra(f.suffix)
+        if missing is not None:
+            skip(f, missing)
             continue
         try:
             data = f.abs_path.read_bytes()
         except OSError as e:
             skip(f, f"unreadable: {e.strerror or e}")
             continue
-        decoded = decode(data)
+        doc_key = _doc_key(hashlib.sha256(data).hexdigest(), documents.content_mode(f.suffix))
+        if prior is not None and prior[2] == doc_key and doc_key in cached_docs:
+            # Touched but identical: no need to decode or extract again.
+            docs.append(_Doc(f, doc_key))
+            continue
+        decoded = documents.load_text(f.suffix, data)
         if decoded.text is None:
             skip(f, decoded.skip_reason or "unreadable")
             continue
-        doc_key = _doc_key(hashlib.sha256(data).hexdigest(), f.is_markdown)
         if prior is None:
             stats.added += 1
         elif prior[2] != doc_key:
@@ -262,6 +290,11 @@ def _scan(
                         for i, c in enumerate(chunks)
                     ],
                 )
+                if f.suffix == ".pdf":
+                    db.execute(
+                        "INSERT OR REPLACE INTO pages VALUES (?, ?)",
+                        (doc_key, json.dumps(documents.page_starts(decoded.text))),
+                    )
             cached_docs.add(doc_key)
         docs.append(_Doc(f, doc_key))
     seen = {d.file.rel_path for d in docs}
@@ -360,6 +393,7 @@ def _prune(db: sqlite3.Connection, docs: list[_Doc], live_keys: set[str] | None)
             "INSERT OR IGNORE INTO live_keys VALUES (?)", [(k,) for k in live_keys or ()]
         )
         db.execute("DELETE FROM chunks WHERE doc_key NOT IN (SELECT doc_key FROM live_docs)")
+        db.execute("DELETE FROM pages WHERE doc_key NOT IN (SELECT doc_key FROM live_docs)")
         if live_keys is not None:
             db.execute("DELETE FROM embeddings WHERE key NOT IN (SELECT key FROM live_keys)")
 

@@ -7,7 +7,12 @@ Skipped while walking:
 - common build and dependency directories (`node_modules`, `target`, ...);
 - anything matched by a `.notelightignore` file at the folder root, which
   uses `.gitignore` syntax;
-- files with other extensions, and files over `MAX_FILE_BYTES`.
+- files with other extensions, and files over `max_bytes` for their type
+  (`MAX_FILE_BYTES` for text, `MAX_DOCUMENT_BYTES` for PDF and DOCX).
+
+PDF and DOCX files are always found, even without the extra that reads them:
+the indexer then records them as skipped with a reason that says what to
+install (see `notelight.documents`).
 
 Paths are reported relative to the folder with `/` separators on every OS, so
 an index built on Windows reads the same as one built on Linux.
@@ -23,21 +28,30 @@ from pathlib import Path
 import pathspec
 
 __all__ = [
+    "DOCUMENT_SUFFIXES",
     "IGNORE_FILE",
+    "INDEXED_SUFFIXES",
     "MARKDOWN_SUFFIXES",
+    "MAX_DOCUMENT_BYTES",
     "MAX_FILE_BYTES",
     "SKIP_DIRS",
     "TEXT_SUFFIXES",
     "Decoded",
     "SourceFile",
     "decode",
+    "max_bytes",
     "walk",
 ]
 
 IGNORE_FILE = ".notelightignore"
 MARKDOWN_SUFFIXES = frozenset({".md", ".markdown"})
 TEXT_SUFFIXES = MARKDOWN_SUFFIXES | {".txt"}
+#: Document suffix -> the extra that reads it (`pip install notelight[pdf]`).
+DOCUMENT_SUFFIXES = {".pdf": "pdf", ".docx": "docx"}
+INDEXED_SUFFIXES = TEXT_SUFFIXES | DOCUMENT_SUFFIXES.keys()
 MAX_FILE_BYTES = 10 * 1024 * 1024
+#: PDFs carry fonts and images, so they get a larger limit than text.
+MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 SKIP_DIRS = frozenset(
     {"node_modules", "target", "build", "dist", "__pycache__", "venv", "site-packages"}
 )
@@ -55,9 +69,22 @@ class SourceFile:
     mtime_ns: int
 
     @property
+    def suffix(self) -> str:
+        """The lower-cased file extension, such as `.md` or `.pdf`."""
+        return Path(self.rel_path).suffix.lower()
+
+    @property
     def is_markdown(self) -> bool:
-        """Whether to chunk with Markdown structure (headings, code fences)."""
-        return Path(self.rel_path).suffix.lower() in MARKDOWN_SUFFIXES
+        """Whether to chunk with Markdown structure (headings, code fences).
+
+        True for DOCX too: its text is extracted with Markdown headings.
+        """
+        return self.suffix in MARKDOWN_SUFFIXES or self.suffix == ".docx"
+
+
+def max_bytes(suffix: str) -> int:
+    """Largest file of type `suffix` that is indexed."""
+    return MAX_DOCUMENT_BYTES if suffix.lower() in DOCUMENT_SUFFIXES else MAX_FILE_BYTES
 
 
 def _load_ignore(root: Path) -> pathspec.GitIgnoreSpec | None:
@@ -85,7 +112,8 @@ def walk(root: Path) -> Iterator[SourceFile]:
             and not (spec is not None and spec.match_file(prefix + d + "/"))
         )
         for name in sorted(filenames):
-            if name.startswith(".") or Path(name).suffix.lower() not in TEXT_SUFFIXES:
+            suffix = Path(name).suffix.lower()
+            if name.startswith(".") or suffix not in INDEXED_SUFFIXES:
                 continue
             rel = prefix + name
             if spec is not None and spec.match_file(rel):
@@ -95,14 +123,15 @@ def walk(root: Path) -> Iterator[SourceFile]:
                 st = path.stat()
             except OSError:
                 continue  # vanished or unreadable; the next sync will see it
-            if st.st_size > MAX_FILE_BYTES:
+            if st.st_size > max_bytes(suffix):
                 continue
             yield SourceFile(rel, path, st.st_size, st.st_mtime_ns)
 
 
 @dataclass(frozen=True)
 class Decoded:
-    """Result of `decode`: the text, or why the file was skipped."""
+    """Result of `decode` or of document extraction: the text, or why the
+    file was skipped."""
 
     text: str | None
     encoding: str | None = None

@@ -12,7 +12,7 @@ from typing import Any
 
 import numpy as np
 
-from notelight import _core, paths
+from notelight import _core, documents, paths
 from notelight.embed import Embedder
 from notelight.errors import EmbedderMismatchError, IndexNotFoundError
 from notelight.indexer import CACHE_FILE, CORE_DIR, SOURCE_FILE
@@ -26,9 +26,11 @@ __all__ = [
     "Staleness",
     "check_staleness",
     "describe_index",
+    "format_pages",
     "indexed_files",
     "indexed_folders",
     "list_indexes",
+    "page_starts",
     "skipped_files",
     "snippet",
 ]
@@ -50,15 +52,35 @@ class SearchResult:
     bm25_rank: int | None
     vector_rank: int | None
     chunk_id: int
+    page_start: int | None = None
+    """First PDF page the chunk is on (1-based); None for other files."""
+    page_end: int | None = None
+    """Last PDF page the chunk is on; None for other files."""
 
     @property
     def location(self) -> str:
-        """`path:start-end`, the citation format used throughout notelight."""
+        """`path:start-end`, the citation format used throughout notelight.
+
+        For a PDF the lines are those of its extracted text (see
+        `notelight.documents`); `pages` names the pages they are on.
+        """
         return f"{self.path}:{self.line_start}-{self.line_end}"
 
+    @property
+    def pages(self) -> str | None:
+        """`p. 3` or `pp. 3-4` for a PDF hit, else None."""
+        return format_pages(self.page_start, self.page_end)
+
     def to_dict(self) -> dict[str, Any]:
-        """JSON-ready form, including `location`."""
-        return {**asdict(self), "location": self.location}
+        """JSON-ready form, including `location` and `pages`."""
+        return {**asdict(self), "location": self.location, "pages": self.pages}
+
+
+def format_pages(first: int | None, last: int | None) -> str | None:
+    """`p. 3` or `pp. 3-4`, or None without a page."""
+    if first is None or last is None:
+        return None
+    return f"p. {first}" if first == last else f"pp. {first}-{last}"
 
 
 def snippet(text: str, width: int = 240) -> str:
@@ -117,9 +139,14 @@ class Searcher:
             # punctuation with the hashing embedder): search keywords alone.
             vector = None
         hits = self._reader.search(query, vector, k=k)
+        records = [(hit, self._reader.chunk(hit.id)) for hit in hits]
+        pdfs = {rec.path for _, rec in records if rec.path.lower().endswith(".pdf")}
+        starts = page_starts(self.folder, pdfs)
         results = []
-        for hit in hits:
-            rec = self._reader.chunk(hit.id)
+        for hit, rec in records:
+            pages: tuple[int | None, int | None] = (None, None)
+            if rec.path in starts:
+                pages = documents.page_range(starts[rec.path], rec.line_start, rec.line_end)
             results.append(
                 SearchResult(
                     path=rec.path,
@@ -131,6 +158,8 @@ class Searcher:
                     bm25_rank=hit.bm25_rank,
                     vector_rank=hit.vector_rank,
                     chunk_id=hit.id,
+                    page_start=pages[0],
+                    page_end=pages[1],
                 )
             )
         return results
@@ -225,19 +254,47 @@ def indexed_files(folder: str | Path) -> dict[str, tuple[int, int]]:
     return {str(p): (int(s), int(m)) for p, s, m in rows}
 
 
-def skipped_files(folder: str | Path) -> dict[str, tuple[int, int]]:
-    """Relative path -> (size, mtime_ns) of every file the last sync found but
-    could not index (binary, undecodable, unreadable). Empty for a cache
-    written before this was recorded."""
+def page_starts(folder: str | Path, rel_paths: set[str]) -> dict[str, list[int]]:
+    """Relative path -> the line each page starts on, for the indexed PDFs
+    among `rel_paths` (see `documents.page_starts`).
+
+    Read from the indexer's cache without the writer lock. Paths with no
+    recorded pages are left out.
+    """
+    cache = paths.index_dir_for(folder) / CACHE_FILE
+    if not rel_paths or not cache.is_file():
+        return {}
+    wanted = sorted(rel_paths)
+    marks = ",".join("?" * len(wanted))
+    try:
+        with contextlib.closing(sqlite3.connect(f"{cache.as_uri()}?mode=ro", uri=True)) as db:
+            rows = db.execute(
+                "SELECT files.path, pages.starts FROM files "
+                f"JOIN pages ON pages.doc_key = files.doc_key WHERE files.path IN ({marks})",
+                wanted,
+            ).fetchall()
+    except sqlite3.Error:
+        return {}  # a cache from before pages were recorded
+    return {str(p): [int(n) for n in json.loads(s)] for p, s in rows}
+
+
+def _skipped_rows(folder: str | Path) -> dict[str, tuple[int, int, str]]:
     cache = paths.index_dir_for(folder) / CACHE_FILE
     if not cache.is_file():
         return {}
     try:
         with contextlib.closing(sqlite3.connect(f"{cache.as_uri()}?mode=ro", uri=True)) as db:
-            rows = db.execute("SELECT path, size, mtime_ns FROM skipped").fetchall()
+            rows = db.execute("SELECT path, size, mtime_ns, reason FROM skipped").fetchall()
     except sqlite3.Error:
         return {}
-    return {str(p): (int(s), int(m)) for p, s, m in rows}
+    return {str(p): (int(s), int(m), str(r)) for p, s, m, r in rows}
+
+
+def skipped_files(folder: str | Path) -> dict[str, tuple[int, int]]:
+    """Relative path -> (size, mtime_ns) of every file the last sync found but
+    could not index (binary, undecodable, unreadable, missing extra). Empty
+    for a cache written before this was recorded."""
+    return {p: (s, m) for p, (s, m, _) in _skipped_rows(folder).items()}
 
 
 @dataclass(frozen=True)
@@ -266,15 +323,24 @@ def check_staleness(folder: str | Path) -> Staleness:
     """Compare `folder` on disk with its last sync. Reads only file metadata."""
     root = paths.normalize_folder(folder)
     known = indexed_files(root)
-    skipped = skipped_files(root)
+    skipped = _skipped_rows(root)
     added = modified = 0
     seen: set[str] = set()
     for f in walk(root):
         seen.add(f.rel_path)
         prior = known.get(f.rel_path)
         if prior is None:
-            # A file the last sync skipped is not new unless it changed since.
-            if skipped.get(f.rel_path) != (f.size, f.mtime_ns):
+            # A file the last sync skipped is not new unless it changed since,
+            # or it was skipped for want of an extra that is now installed.
+            skip = skipped.get(f.rel_path)
+            if (
+                skip is None
+                or skip[:2] != (f.size, f.mtime_ns)
+                or (
+                    documents.is_missing_extra_reason(skip[2])
+                    and documents.missing_extra(f.suffix) is None
+                )
+            ):
                 added += 1
         elif prior != (f.size, f.mtime_ns):
             modified += 1

@@ -130,13 +130,14 @@ without repeating checks.
 
 Every sync writes a complete new generation (see above) instead of patching
 the index. The costly step, embedding, is cached, so a full rebuild only costs
-the time to write files. The indexer keeps three caches in `cache.sqlite` next
+the time to write files. The indexer keeps its caches in `cache.sqlite` next
 to the index:
 
 | Table | Key | Saves |
 |---|---|---|
 | `files` | relative path → size, mtime, content key | reading and hashing files that did not change |
-| `chunks` | `sha256(file bytes)` + chunking mode | re-chunking known content |
+| `chunks` | `sha256(file bytes)` + chunking mode (or document extractor) | re-chunking known content |
+| `pages` | same key as `chunks` | the line each PDF page starts on (see Milestone 5) |
 | `embeddings` | `sha256(model_id + "\n" + embedded text)` | re-embedding known chunks |
 | `skipped` | relative path → size, mtime, reason | re-reading binary or undecodable files; reporting them as new in `index_status` |
 
@@ -352,3 +353,75 @@ the model as an `is_error` result with a message it can act on, rather than a
 protocol error. Tests drive the server through the SDK's in-process `Client`,
 plus one test that launches `notelight mcp` as a subprocess over stdio to
 prove nothing but protocol messages is written to stdout.
+
+## Milestone 5 decisions: PDF and DOCX
+
+### Optional extras, pure-Python readers
+
+PDF and DOCX support ships as extras (`notelight[pdf]`, `[docx]`,
+`[documents]`), so the base install keeps its small dependency list. The
+readers are pypdf (BSD-3-Clause) and python-docx (MIT). Both are pure Python
+and installed from wheels on every OS, so they add no build step and no
+native library to the Windows, macOS and Linux matrix. The alternatives
+were rejected: PyMuPDF is faster and better at layout, but it is AGPL, which
+does not fit an MIT/Apache project; pdfminer.six is MIT and accurate, but
+slower and much larger than pypdf for plain text; docx2txt drops the styles
+needed for headings. Extraction quality is pypdf's: reading order follows the
+content stream, and there is no OCR.
+
+Without the extra, `walk` still finds `.pdf` and `.docx` files and the indexer
+records them in `skipped` with the reason `install notelight[pdf]` (or
+`[docx]`). That reason is special in two places: the indexer reads such a file
+again once the extra is importable, even though its size and mtime did not
+change, and `index_status` counts it as added. Other skip reasons stick until
+the file changes. Encrypted PDFs are tried with the empty user password
+first (many are encrypted only to restrict printing); otherwise they, image-only
+PDFs (no text on any page) and anything pypdf or python-docx fails to parse are
+skipped with a reason. Extraction catches every exception from the readers:
+a malformed file must never stop a sync. Documents may be up to 50 MB
+(`MAX_DOCUMENT_BYTES`); text files keep the 10 MB limit.
+
+### Citations: lines of the extracted text, pages beside them
+
+The core's `ChunkRecord` (path, heading path, line range, text) and the
+on-disk format are unchanged. A PDF or DOCX is chunked as the text extracted
+from it, and its citation is `path:line_start-line_end` in that text, like
+any other file. `read_context` extracts the file again the same way, so the
+cited lines are the ones it returns. The cache key of a document's chunks
+includes the extractor id (an extraction version plus the library and its
+version, for example `pdf1:pypdf-6.20.1`), so upgrading pypdf re-extracts
+and re-chunks rather than mixing old chunks with new line numbers. A
+`read_context` served while the installed library differs from the one used
+at index time could still shift lines; `index_status` does not detect that,
+and `notelight index` fixes it.
+
+PDF pages are joined with a form feed: every page's text ends in a newline,
+and every page after the first starts with `\f`. A page therefore always
+starts on a new line, and a line belongs to exactly one page. The line on
+which each page starts is stored per document in a `pages` table of
+`cache.sqlite` (next to `chunks`, keyed and pruned the same way). A search
+hit's pages come from that table and its line range (`page_start`,
+`page_end`, shown as `p. 3` or `pp. 3-4`); `read_context` computes them from
+the text it extracted. Chunks may cross a page boundary: chunking per page
+would leave short pages as tiny chunks, and a page range is still a precise
+citation. Keeping lines as the primary citation, rather than switching PDFs
+to `report.pdf:p3`, means one parser and one `read_context` for every file
+type, and lines stay finer-grained than pages.
+
+Putting the page into the core's `ChunkRecord` was the alternative. It would
+be self-contained in the index, but it is a schema change (a new field in
+`chunks.bin` and `SCHEMA_VERSION` 3) for something only one file type has,
+and the page table is derived data that the indexer's cache already holds.
+The cost of the cache is that a searcher reading an old generation sees the
+newest page table, so for one query after a PDF changes its pages can be off;
+the line citation is not affected.
+
+DOCX has no stable lines or pages (pagination depends on the renderer).
+Body paragraphs and tables are written in document order, one paragraph per
+line and a blank line after each, which is the paragraph structure the
+chunker already understands. Paragraphs styled `Heading 1` to `Heading 6`
+become `#` headings and the text is chunked as Markdown, so they become
+heading paths exactly as in a `.md` note. A body line that Markdown would read
+as a heading or a fence (`# ...`, ```` ``` ````) is escaped with a backslash.
+Table rows become `cell | cell` lines; headers, footers, comments and text
+boxes are left out.

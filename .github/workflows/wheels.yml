@@ -1,18 +1,31 @@
 name: Wheels
 
 # Builds abi3 wheels (one per platform, works on every Python >= 3.10) and an
-# sdist. Publishing to PyPI happens only for version tags, via trusted publishing.
+# sdist, then installs each wheel into a clean venv and runs the CLI. Publishing
+# to PyPI happens only for version tags, via trusted publishing, and only after
+# every smoke test passes.
 on:
   push:
     tags: ["v*"]
+  pull_request:
+    paths:
+      - pyproject.toml
+      - Cargo.toml
+      - Cargo.lock
+      - crates/notelight-py/**
+      - .github/workflows/wheels.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
   wheels:
-    name: ${{ matrix.target }} on ${{ matrix.os }}
+    name: Build ${{ matrix.target }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -38,7 +51,72 @@ jobs:
           name: wheels-${{ matrix.os }}-${{ matrix.target }}
           path: dist
 
+  # Install each wheel the way a user would: a fresh venv, dependencies from
+  # PyPI, no Rust on PATH and no source builds allowed. The hashing embedder
+  # keeps it offline apart from pip (no model download).
+  smoke:
+    name: Smoke ${{ matrix.target }} on ${{ matrix.os }}, Python ${{ matrix.python }}
+    needs: wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest and newest supported Python, natively on each platform.
+        # Intel macOS stops at 3.13: onnxruntime 1.24+ ships no x86_64 macOS
+        # wheels, and 1.23 has none for 3.14.
+        include:
+          - { os: ubuntu-latest, target: x86_64, artifact: wheels-ubuntu-latest-x86_64, python: "3.10" }
+          - { os: ubuntu-latest, target: x86_64, artifact: wheels-ubuntu-latest-x86_64, python: "3.14" }
+          - { os: ubuntu-24.04-arm, target: aarch64, artifact: wheels-ubuntu-latest-aarch64, python: "3.10" }
+          - { os: ubuntu-24.04-arm, target: aarch64, artifact: wheels-ubuntu-latest-aarch64, python: "3.14" }
+          - { os: windows-latest, target: x64, artifact: wheels-windows-latest-x64, python: "3.10" }
+          - { os: windows-latest, target: x64, artifact: wheels-windows-latest-x64, python: "3.14" }
+          - { os: macos-latest, target: aarch64, artifact: wheels-macos-latest-aarch64, python: "3.10" }
+          - { os: macos-latest, target: aarch64, artifact: wheels-macos-latest-aarch64, python: "3.14" }
+          - { os: macos-15-intel, target: x86_64, artifact: wheels-macos-latest-x86_64, python: "3.10" }
+          - { os: macos-15-intel, target: x86_64, artifact: wheels-macos-latest-x86_64, python: "3.13" }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # No checkout: the test must not see the repository's python/ sources.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist
+      - name: Install the wheel into a clean venv
+        run: |
+          # Drop rustup/cargo from PATH so nothing could compile the extension.
+          PATH=$(echo "$PATH" | tr ':' '\n' | grep -v -i cargo | paste -sd: -)
+          if command -v cargo; then echo "cargo is still on PATH"; exit 1; fi
+          python -m venv "$RUNNER_TEMP/venv"
+          if [ -d "$RUNNER_TEMP/venv/Scripts" ]; then bin="$RUNNER_TEMP/venv/Scripts"; else bin="$RUNNER_TEMP/venv/bin"; fi
+          echo "$bin" >> "$GITHUB_PATH"
+          ls dist
+          "$bin/python" -m pip install --only-binary=:all: dist/*.whl
+      - name: notelight version
+        run: notelight version
+      - name: Index and search a tiny folder (hashing embedder)
+        working-directory: ${{ runner.temp }}
+        env:
+          NOTELIGHT_HOME: ${{ runner.temp }}/notelight-home
+        run: |
+          mkdir -p notes/runbooks
+          printf '# Release\n\n## Hotfixes\n\nTag the commit, build the wheels, publish to PyPI.\n' > notes/runbooks/release.md
+          printf '# Garden\n\nWater the tomatoes every morning in July.\n' > notes/garden.txt
+          notelight index notes --embedder hashing
+          notelight search "publish hotfix wheels" -f notes -k 2
+          notelight search "publish hotfix wheels" -f notes -k 2 --json > hits.json
+          python -c "import json; hits = json.load(open('hits.json', encoding='utf-8'))['results']; assert hits[0]['path'] == 'runbooks/release.md', hits; print('top hit:', hits[0]['location'])"
+          notelight status --json > /dev/null
+      - name: The MCP server imports
+        run: python -c "import notelight.mcp_server as m; print('mcp server ok', m.__name__)"
+
   sdist:
+    name: Build and test the sdist
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -46,6 +124,18 @@ jobs:
         with:
           command: sdist
           args: --out dist
+      - name: Tag matches the package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: test -f "dist/notelight-${GITHUB_REF_NAME#v}.tar.gz"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # Building from the sdist (not the checkout) catches files missing from it.
+      - name: Install from the sdist (compiles the Rust extension)
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install dist/*.tar.gz
+          cd "$RUNNER_TEMP" && "$RUNNER_TEMP/venv/bin/notelight" version
       - uses: actions/upload-artifact@v7
         with:
           name: sdist
@@ -54,7 +144,7 @@ jobs:
   publish:
     name: Publish to PyPI
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [wheels, sdist]
+    needs: [wheels, smoke, sdist]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -64,4 +154,5 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - run: ls -l dist
       - uses: pypa/gh-action-pypi-publish@release/v1

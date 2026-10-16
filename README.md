@@ -2,18 +2,19 @@
 
 [![CI](https://github.com/searope/notelight/actions/workflows/ci.yml/badge.svg)](https://github.com/searope/notelight/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-[![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](Cargo.toml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+[![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://github.com/searope/notelight/blob/main/Cargo.toml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://github.com/searope/notelight/blob/main/pyproject.toml)
 
 **Private semantic search over your own files, for you and your AI agents.**
 A Rust retrieval engine with a Python interface, a CLI, and an MCP server, with
 retrieval quality you can measure.
 
-> **Status: milestone 4 of 5.** You can index a folder of notes, search it
+> **Status: 0.1.0, alpha.** You can index a folder of notes, search it
 > from the command line or [from Claude, Cursor and other AI agents over
 > MCP](#use-with-claude--cursor), and measure retrieval quality on public
-> benchmarks ([results](#retrieval-quality)). A localhost web UI and PyPI
-> wheels (milestone 5) are next. See the [roadmap](#roadmap).
+> benchmarks ([results](#retrieval-quality)). A localhost web UI and PDF/DOCX
+> support are next (0.2). See the [roadmap](#roadmap) and the
+> [changelog](https://github.com/searope/notelight/blob/main/CHANGELOG.md).
 
 ## Why
 
@@ -30,12 +31,23 @@ an upload. notelight keeps everything on your machine:
 
 ## Usage
 
-notelight is not on PyPI yet (milestone 5), so install it from source. You
-need [Rust](https://rustup.rs) and Python 3.10+:
+Install it from PyPI (Python 3.10+), ideally into a virtual environment or
+with `pipx install notelight`:
 
 ```bash
-pip install git+https://github.com/searope/notelight
+pip install notelight
 ```
+
+There are prebuilt wheels for Linux (x86_64 and aarch64, glibc 2.28+),
+Windows (x64) and macOS (Apple silicon and Intel), so you do not need Rust.
+Two limits come from ONNX Runtime, which runs the embedding model: on Intel
+Macs use Python 3.10 to 3.13, and Alpine and other musl-based Linux
+distributions are not supported. On any other platform pip builds from the
+source distribution, which needs [Rust](https://rustup.rs) 1.88+ (and the
+MSVC C++ build tools on Windows). To install
+the latest unreleased code, use
+`pip install git+https://github.com/searope/notelight` (also needs Rust), or
+see [Development](#development).
 
 Index a folder of Markdown and text files, then search it. This is a real
 run over this repository's `docs/` folder on a laptop CPU:
@@ -127,8 +139,8 @@ then restart Claude:
 {
   "mcpServers": {
     "notelight": {
-      "command": "C:\Users\you\.venvs\notelight\Scripts\notelight.exe",
-      "args": ["mcp", "--folder", "C:\Users\you\Notes"]
+      "command": "C:\\Users\\you\\.venvs\\notelight\\Scripts\\notelight.exe",
+      "args": ["mcp", "--folder", "C:\\Users\\you\\Notes"]
     }
   }
 }
@@ -157,7 +169,7 @@ Then ask, for example: *"Search my notes for how we release hotfixes and cite
 the files."* The agent calls `search`, reads around the best hits with
 `read_context`, and answers with locations like `runbooks/release.md:40-58`.
 
-![An agent calling list_sources, search and read_context on this repository's docs](docs/assets/mcp-demo.gif)
+![An agent calling list_sources, search and read_context on this repository's docs](https://raw.githubusercontent.com/searope/notelight/main/docs/assets/mcp-demo.gif)
 
 The tool calls and results in this GIF come from a real session: the
 script indexes this repository's `docs/` folder with bge-small, starts
@@ -207,13 +219,13 @@ vector, because the ternary pass compares 96 bytes per vector (sign bits and
 mask) with `popcount`, and only 200 candidates are re-scored. Binary
 candidates halve the scan but lose up to 0.01 nDCG@10 ([below](#retrieval-quality)). The int8 dot product keeps 16 partial sums so
 the compiler can use SIMD; see
-[the note on vectorizing it](docs/learning/m3-int8-dot-vectorization.md).
+[the note on vectorizing it](https://github.com/searope/notelight/blob/main/docs/learning/m3-int8-dot-vectorization.md).
 
 ## Retrieval quality
 
 nDCG@10 on three [BEIR](https://github.com/beir-cellar/beir) test sets with
 the default bge-small embedder, measured with `notelight eval` (one command,
-datasets pinned by SHA-256; see [docs/results.md](docs/results.md) for
+datasets pinned by SHA-256; see [docs/results.md](https://github.com/searope/notelight/blob/main/docs/results.md) for
 recall@10, latency and the setup):
 
 | Method | SciFact | NFCorpus | FiQA |
@@ -235,7 +247,7 @@ top-10 lists; its two-stage searches are 7 to 19x faster (10 to 19x for the
 ternary default), while NumPy's multi-threaded BLAS still wins the
 exhaustive int8 scan by 1.3 to 1.7x (it was 5x before the int8 dot product
 was vectorized).
-Details and caveats are in [docs/results.md](docs/results.md).
+Details and caveats are in [docs/results.md](https://github.com/searope/notelight/blob/main/docs/results.md).
 
 ```powershell
 notelight eval                     # downloads 23 MB of data once; FiQA takes ~40 min to embed on a CPU
@@ -246,6 +258,8 @@ notelight eval                     # downloads 23 MB of data once; FiQA takes ~4
 Requirements: [Rust](https://rustup.rs) (stable) and Python 3.10+.
 
 ```bash
+git clone https://github.com/searope/notelight
+cd notelight
 python -m venv .venv
 # Windows: .venv\Scripts\activate   |   macOS/Linux: source .venv/bin/activate
 pip install -e ".[dev]"        # builds the Rust extension via maturin
@@ -266,23 +280,24 @@ After changing Rust code, rebuild with `maturin develop --release`.
 | 2 | Python package: embedder, incremental indexer, CLI | ✅ |
 | 3 | Evaluation: BEIR results table, Rust vs NumPy baseline | ✅ |
 | 4 | MCP server for AI agents | ✅ |
-| 5 | Web UI, PDF/DOCX, wheels on PyPI | ⏳ |
+| 5a | Wheels on PyPI (0.1.0) | ✅ |
+| 5b | Localhost web UI, PDF/DOCX (0.2) | ⏳ |
 | v2 | Same core compiled to WebAssembly, in-browser app | |
 
 ## Documentation
 
-- [Design notes](docs/design-notes.md): why it is built this way
-- [Index format](docs/index-format.md): the on-disk layout, byte by byte
-- [Results](docs/results.md): retrieval quality and latency on BEIR, with the
+- [Design notes](https://github.com/searope/notelight/blob/main/docs/design-notes.md): why it is built this way
+- [Index format](https://github.com/searope/notelight/blob/main/docs/index-format.md): the on-disk layout, byte by byte
+- [Results](https://github.com/searope/notelight/blob/main/docs/results.md): retrieval quality and latency on BEIR, with the
   Rust-vs-NumPy comparison
 - Rust walkthroughs for readers coming from C# or Python:
-  [milestone 0](docs/learning/m0-rust-walkthrough.md),
-  [milestone 1](docs/learning/m1-rust-walkthrough.md),
-  [milestone 2](docs/learning/m2-rust-walkthrough.md),
-  [milestone 3](docs/learning/m3-rust-walkthrough.md) (plus
-  [vectorizing the int8 dot product](docs/learning/m3-int8-dot-vectorization.md)),
-  [milestone 4](docs/learning/m4-rust-walkthrough.md)
+  [milestone 0](https://github.com/searope/notelight/blob/main/docs/learning/m0-rust-walkthrough.md),
+  [milestone 1](https://github.com/searope/notelight/blob/main/docs/learning/m1-rust-walkthrough.md),
+  [milestone 2](https://github.com/searope/notelight/blob/main/docs/learning/m2-rust-walkthrough.md),
+  [milestone 3](https://github.com/searope/notelight/blob/main/docs/learning/m3-rust-walkthrough.md) (plus
+  [vectorizing the int8 dot product](https://github.com/searope/notelight/blob/main/docs/learning/m3-int8-dot-vectorization.md)),
+  [milestone 4](https://github.com/searope/notelight/blob/main/docs/learning/m4-rust-walkthrough.md)
 
 ## License
 
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+Dual-licensed under [MIT](https://github.com/searope/notelight/blob/main/LICENSE-MIT) or [Apache-2.0](https://github.com/searope/notelight/blob/main/LICENSE-APACHE), at your option.

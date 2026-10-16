@@ -23,6 +23,7 @@ classifiers = [
 dynamic = ["version"]
 dependencies = [
   "filelock>=3.13",
+  "mcp>=2.3,<3",
   "numpy>=1.26",
   "onnxruntime>=1.19",
   "pathspec>=0.12",
@@ -32,7 +33,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["maturin>=1.8,<2", "pytest>=8", "ruff>=0.6", "mypy>=1.11"]
+dev = ["maturin>=1.8,<2", "pytest>=8", "anyio>=4", "ruff>=0.6", "mypy>=1.11"]
 
 [project.scripts]
 notelight = "notelight.cli:app"

@@ -99,3 +99,9 @@ def test_status(notes: Path) -> None:
     assert info["files"] == 3 and info["embedder"] == "hashing-256"
     result = runner.invoke(app, ["status", str(notes)])
     assert "3 files" in result.output
+
+
+def test_mcp_refuses_a_folder_that_is_not_indexed(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["mcp", "--folder", str(tmp_path)])
+    assert result.exit_code == 2
+    assert "is not indexed" in result.output

@@ -13,15 +13,24 @@ from notelight import _core, paths
 from notelight.embed import Embedder
 from notelight.errors import EmbedderMismatchError, IndexNotFoundError
 from notelight.indexer import CACHE_FILE, CORE_DIR, SOURCE_FILE
+from notelight.ingest import walk
 
 __all__ = [
+    "CURRENT_FILE",
     "IndexInfo",
     "SearchResult",
     "Searcher",
+    "Staleness",
+    "check_staleness",
     "describe_index",
+    "indexed_files",
+    "indexed_folders",
     "list_indexes",
     "snippet",
 ]
+
+#: The file in an index root that names the live generation (see docs/index-format.md).
+CURRENT_FILE = "CURRENT"
 
 
 @dataclass(frozen=True)
@@ -83,6 +92,18 @@ class Searcher:
                 "re-index with this embedder or search with the original one"
             )
         self._embedder = embedder
+
+    def is_live(self) -> bool:
+        """Whether this searcher still reads the live generation.
+
+        A sync that commits a new generation leaves open searchers on the old
+        one; long-lived callers (the MCP server) check this and reopen.
+        """
+        try:
+            current = (self._reader.dir.parent / CURRENT_FILE).read_text(encoding="utf-8")
+        except OSError:
+            return False
+        return current.strip() == self._reader.dir.name
 
     def search(self, query: str, k: int = 10) -> list[SearchResult]:
         """Hybrid BM25 + vector search (BM25 only without an embedder)."""
@@ -165,6 +186,78 @@ def _count_files(cache: Path) -> int:
             return int(db.execute("SELECT COUNT(*) FROM files").fetchone()[0])
     except sqlite3.Error:
         return 0
+
+
+def indexed_files(folder: str | Path) -> dict[str, tuple[int, int]]:
+    """Relative path -> (size, mtime_ns) of every file in the last sync.
+
+    Read from the indexer's cache without taking the writer lock. Empty if the
+    folder was never indexed.
+    """
+    cache = paths.index_dir_for(folder) / CACHE_FILE
+    if not cache.is_file():
+        return {}
+    try:
+        with contextlib.closing(sqlite3.connect(f"{cache.as_uri()}?mode=ro", uri=True)) as db:
+            rows = db.execute("SELECT path, size, mtime_ns FROM files").fetchall()
+    except sqlite3.Error:
+        return {}
+    return {str(p): (int(s), int(m)) for p, s, m in rows}
+
+
+@dataclass(frozen=True)
+class Staleness:
+    """How a folder differs from its index, judged by file size and mtime.
+
+    `modified` counts files whose size or mtime changed; a file that was only
+    touched counts too, although `notelight index` would find nothing to do.
+    """
+
+    added: int
+    modified: int
+    removed: int
+
+    @property
+    def stale(self) -> bool:
+        """Whether `notelight index` may have something to update."""
+        return bool(self.added or self.modified or self.removed)
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-ready form, including `stale`."""
+        return {**asdict(self), "stale": self.stale}
+
+
+def check_staleness(folder: str | Path) -> Staleness:
+    """Compare `folder` on disk with its last sync. Reads only file metadata."""
+    root = paths.normalize_folder(folder)
+    known = indexed_files(root)
+    added = modified = 0
+    seen: set[str] = set()
+    for f in walk(root):
+        seen.add(f.rel_path)
+        prior = known.get(f.rel_path)
+        if prior is None:
+            added += 1
+        elif prior != (f.size, f.mtime_ns):
+            modified += 1
+    return Staleness(added, modified, sum(1 for p in known if p not in seen))
+
+
+def indexed_folders() -> list[Path]:
+    """Folders with a committed index, sorted. Cheaper than `list_indexes`:
+    no index is opened."""
+    base = paths.indexes_dir()
+    if not base.is_dir():
+        return []
+    folders = []
+    for d in sorted(base.iterdir()):
+        try:
+            source = json.loads((d / SOURCE_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if _core.index_exists(d / CORE_DIR):
+            folders.append(Path(source["folder"]))
+    return sorted(folders, key=lambda f: str(f).lower())
 
 
 def list_indexes() -> list[IndexInfo]:

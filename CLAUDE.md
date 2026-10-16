@@ -31,7 +31,7 @@ crates/notelight-core/   pure Rust engine, no Python/ML/async deps (WASM-portabl
   benches/search.rs      criterion benchmarks (numbers quoted in README)
 crates/notelight-py/     thin PyO3 bindings -> python module notelight._core
 crates/notelight-py/src/ lib.rs, errors.rs (core Error -> Python exceptions), chunking.rs, index.rs
-python/notelight/        Python package: embed.py, ingest.py, indexer.py, search.py, paths.py, cli.py,
+python/notelight/        Python package: embed.py, ingest.py, indexer.py, search.py, paths.py, cli.py, mcp_server.py,
                          download.py, eval/ (datasets, metrics, NumPy baseline, runner, report)
 tests/                   pytest
 docs/                    design-notes.md, index-format.md (spec), results.md (BEIR numbers), learning/
@@ -81,8 +81,8 @@ C++, x64/x86 build tools, Windows SDK).
 | 1 | Rust core: chunking, BM25, quantized search, RRF, index format | done (independently reviewed; 8 findings fixed) |
 | 2 | Python package: bindings, embedder, incremental indexer, CLI | done |
 | 3 | Eval: BEIR (SciFact, NFCorpus, FiQA) recall@10/nDCG@10 for f32, int8, binary, binary+rescore, ternary+rescore, BM25, hybrid; Rust vs NumPy baseline | done |
-| 4 | MCP server (official Python SDK, stdio): search, read_context, list_sources, index_status; demo GIF | **next** |
-| 5 | Localhost web UI (FastAPI + one page), PDF/DOCX extras, wheels via maturin-action, PyPI | |
+| 4 | MCP server (official Python SDK, stdio): search, read_context, list_sources, index_status; demo GIF | done (demo GIF still to record) |
+| 5 | Localhost web UI (FastAPI + one page), PDF/DOCX extras, wheels via maturin-action, PyPI | **next** |
 | v2 | Same core compiled to wasm32 + TypeScript browser app | |
 
 ## Milestone 2 notes (for whoever picks up M3)
@@ -111,3 +111,17 @@ C++, x64/x86 build tools, Windows SDK).
   `vectors.bin` (schema version 2), computed from the int8 codes.
 - Open follow-up from the results: a vectorized `int8_dot` (NumPy BLAS wins
   the exhaustive int8 scan 5x).
+
+## Milestone 4 notes (for whoever picks up M5)
+
+- `notelight mcp` lives in `mcp_server.py`: `NotesService` is plain Python
+  (testable without MCP); `create_server` wraps it in mcp 2.x `MCPServer`.
+  Decisions are in `docs/design-notes.md`, "Milestone 4 decisions".
+- The server is read-only and never takes the writer lock. It caches one
+  `Searcher` per folder and reopens it when `Searcher.is_live()` is false.
+- `read_context` accepts only paths listed in the index's `files` cache table
+  (`search.indexed_files`); keep that as the single security check.
+- Tests use `mcp.Client(server)` in-process with `@pytest.mark.anyio`; one
+  test runs `python -m notelight.cli mcp` over real stdio.
+- The README demo GIF (`docs/assets/mcp-demo.gif`) is a placeholder with
+  recording instructions; it still needs recording by hand.

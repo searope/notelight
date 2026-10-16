@@ -9,10 +9,11 @@
 A Rust retrieval engine with a Python interface, a CLI, and an MCP server, with
 retrieval quality you can measure.
 
-> **Status: milestone 3 of 5.** You can index a folder of notes, search it
-> from the command line, and measure retrieval quality on public benchmarks
-> ([results](#retrieval-quality)). The MCP server for AI agents (milestone 4)
-> is next. See the [roadmap](#roadmap).
+> **Status: milestone 4 of 5.** You can index a folder of notes, search it
+> from the command line or [from Claude, Cursor and other AI agents over
+> MCP](#use-with-claude--cursor), and measure retrieval quality on public
+> benchmarks ([results](#retrieval-quality)). A localhost web UI and PyPI
+> wheels (milestone 5) are next. See the [roadmap](#roadmap).
 
 ## Why
 
@@ -61,6 +62,7 @@ re-run takes about as long as starting the CLI (0.5 s for the folder above).
 | `notelight index <folder>` | create or update the index for a folder |
 | `notelight search "<query>" [-k 10] [--json] [-f <folder>]` | hybrid search; `--json` returns path, line range, heading path and text for scripts and agents |
 | `notelight status [<folder>] [--json]` | list indexed folders, sizes, embedders and generations |
+| `notelight mcp [-f <folder>]...` | run the MCP server over stdio for AI agents ([below](#use-with-claude--cursor)) |
 | `notelight eval [<dataset or folder>...] [--json]` | recall@10 and nDCG@10 of every retrieval method on BEIR datasets ([below](#retrieval-quality)) |
 | `notelight version` | versions and the data directory |
 
@@ -90,6 +92,77 @@ sync("~/notes", embedder)
 for hit in Searcher("~/notes", embedder).search("release hotfixes", k=5):
     print(hit.location, hit.heading_path)
 ```
+
+## Use with Claude / Cursor
+
+`notelight mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
+server (built on the official Python SDK, over stdio). It gives an agent four
+read-only tools:
+
+| Tool | What it returns |
+|---|---|
+| `search(query, k=10, folder=None)` | hits with `location` (`path:line_start-line_end`), heading path, snippet and score; all indexed folders when `folder` is omitted |
+| `read_context(location, context=5, folder=None)` | the cited lines plus `context` lines around them, read from disk |
+| `list_sources()` | the indexed folders, with file and chunk counts |
+| `index_status(folder=None)` | generation, chunks, embedder, size, and whether files changed since the last `notelight index` |
+
+Index first (`notelight index <folder>`); the server only reads. It never
+takes the indexer's lock, so you can re-index while it runs, and it picks up
+the new generation on the next call. `read_context` only reads files that are
+in the index: paths with `..`, files outside the folder, and hidden or
+ignored files are refused. With no `--folder`, every indexed folder is
+served; pass `--folder` (repeatable) to expose only some of them.
+
+The configs below need the full path to the `notelight` executable, because
+desktop apps do not see your shell's `PATH` or virtual environment. Find it
+with `(Get-Command notelight).Source` in PowerShell or `which notelight`.
+
+**Claude Desktop**: edit `claude_desktop_config.json` (Settings → Developer →
+Edit Config; on Windows it is `%APPDATA%\Claude\claude_desktop_config.json`),
+then restart Claude:
+
+```json
+{
+  "mcpServers": {
+    "notelight": {
+      "command": "C:\Users\you\.venvs\notelight\Scripts\notelight.exe",
+      "args": ["mcp", "--folder", "C:\Users\you\Notes"]
+    }
+  }
+}
+```
+
+**Claude Code**: add a `.mcp.json` to your project root (shared with
+everyone who opens the project), or run
+`claude mcp add notelight -- notelight mcp` for yourself only:
+
+```json
+{
+  "mcpServers": {
+    "notelight": {
+      "type": "stdio",
+      "command": "notelight",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**Cursor**: the same `mcpServers` block goes in `.cursor/mcp.json` (one
+project) or `~/.cursor/mcp.json` (all projects).
+
+Then ask, for example: *"Search my notes for how we release hotfixes and cite
+the files."* The agent calls `search`, reads around the best hits with
+`read_context`, and answers with locations like `runbooks/release.md:40-58`.
+
+<!-- Demo GIF placeholder: replace this comment with
+     ![notelight answering from notes in Claude Desktop](docs/assets/mcp-demo.gif) -->
+*Demo GIF: coming soon.* To record it on Windows: index a small, non-private
+notes folder, add the Claude Desktop config above, and record the Claude
+window with [ScreenToGif](https://www.screentogif.com/) at 10–15 fps while
+asking one question that needs two or three notes (show the expanded tool
+calls). Trim to under 20 seconds, keep the GIF under 5 MB, and save it as
+`docs/assets/mcp-demo.gif`.
 
 ## Architecture
 
@@ -186,8 +259,8 @@ After changing Rust code, rebuild with `maturin develop --release`.
 | 1 | Rust core: chunking, BM25, quantized search, index format | ✅ |
 | 2 | Python package: embedder, incremental indexer, CLI | ✅ |
 | 3 | Evaluation: BEIR results table, Rust vs NumPy baseline | ✅ |
-| 4 | MCP server for AI agents | ⏳ |
-| 5 | Web UI, PDF/DOCX, wheels on PyPI | |
+| 4 | MCP server for AI agents | ✅ |
+| 5 | Web UI, PDF/DOCX, wheels on PyPI | ⏳ |
 | v2 | Same core compiled to WebAssembly, in-browser app | |
 
 ## Documentation
@@ -201,7 +274,8 @@ After changing Rust code, rebuild with `maturin develop --release`.
   [milestone 1](docs/learning/m1-rust-walkthrough.md),
   [milestone 2](docs/learning/m2-rust-walkthrough.md),
   [milestone 3](docs/learning/m3-rust-walkthrough.md) (plus
-  [vectorizing the int8 dot product](docs/learning/m3-int8-dot-vectorization.md))
+  [vectorizing the int8 dot product](docs/learning/m3-int8-dot-vectorization.md)),
+  [milestone 4](docs/learning/m4-rust-walkthrough.md)
 
 ## License
 

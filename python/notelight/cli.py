@@ -1,4 +1,4 @@
-"""Command-line interface: `notelight index | search | status | eval | version`."""
+"""Command-line interface: `notelight index | search | status | mcp | eval | version`."""
 
 from __future__ import annotations
 
@@ -207,6 +207,34 @@ def status(
         return
     for i in infos:
         _print_info(i)
+
+
+@app.command()
+def mcp(
+    folders: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--folder",
+            "-f",
+            help="Serve only this indexed folder (repeat for several). Default: every indexed "
+            "folder, including ones indexed later.",
+            show_default=False,
+        ),
+    ] = None,
+    offline: OfflineOpt = False,
+) -> None:
+    """Run the MCP server over stdio, for Claude, Cursor and other AI agents.
+
+    Searching is read-only: the server never changes an index, so it can run
+    while `notelight index` updates one.
+    """
+    from notelight.mcp_server import serve
+
+    for folder in folders or []:
+        if describe_index(paths.index_dir_for(folder)) is None:
+            target = paths.normalize_folder(folder)
+            _fail(f"{target} is not indexed; run `notelight index {target}` first", code=2)
+    serve(folders or None, offline=offline)
 
 
 @app.command("eval")

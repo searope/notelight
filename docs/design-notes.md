@@ -284,3 +284,57 @@ deliberate. NumPy has no int8 × float32 matrix-vector kernel, so its int8
 codes are kept dequantized as float32 (four times the memory). And NumPy's
 matrix product may use several threads, while the Rust search is one thread
 per query.
+
+## Milestone 4 decisions
+
+### The MCP server only reads
+
+`notelight mcp` serves indexes; it never builds them. Indexing a large folder
+takes minutes and downloads a model the first time, which does not fit inside
+an agent's tool call, and a server that can write would need the writer lock
+and could block `notelight index`. So the server never takes the lock, and
+an agent learns that an index is out of date from `index_status` (which
+compares file sizes and mtimes with the indexer's cache) and tells the user to
+run `notelight index`.
+
+### One searcher per folder, reopened when the generation changes
+
+The server keeps a `Searcher` per folder and an embedder per model id for its
+whole life, so bge-small loads once, not per query. Before each use it
+compares the reader's generation with `CURRENT` (one small file read); after a
+re-index it opens the new generation and drops the old reader, which on
+Windows also lets the next commit delete the old generation's mapped files.
+Tools run in worker threads; the Rust reader is shared between them (it is a
+`frozen`, `Sync` pyclass and releases the GIL while searching), and the
+embedder is behind a lock because ONNX Runtime is loaded lazily.
+
+### `read_context` reads only indexed files
+
+The agent passes back a citation (`path:start-end`) and gets those lines plus
+some context, read from disk. The path is accepted only if it is in the
+index's file list (the `files` table of the indexer's cache), compared after
+normalizing separators. It is never resolved on disk first. That one check
+refuses `..`, absolute paths outside the folder, and hidden or
+ignored files such as `.env`, because none of them was indexed. The agent can
+read nothing that `search` could not already have shown it. Output is capped
+at 400 lines per call.
+
+### Searching several folders merges by fused score
+
+With no `folder` argument, `search` queries every served folder and merges
+the hits by score. Hybrid scores are reciprocal-rank sums, so they depend on
+ranks, not on each index's BM25 or cosine scale, and interleave reasonably.
+They are not perfectly comparable: a keyword-only index contributes one rank
+list per hit, a hybrid index two. Passing `folder` avoids the question.
+`--folder` (repeatable) limits what the server exposes at all.
+
+### mcp 2.x, structured output
+
+The server uses the official SDK's `MCPServer` (mcp 2.x, the successor of
+`FastMCP`). Each tool returns a pydantic model, so clients get an output JSON
+schema and `structuredContent` alongside the text. Anticipated failures (not
+indexed, embedder mismatch, refused path) raise `ToolError`, which reaches
+the model as an `is_error` result with a message it can act on, rather than a
+protocol error. Tests drive the server through the SDK's in-process `Client`,
+plus one test that launches `notelight mcp` as a subprocess over stdio to
+prove nothing but protocol messages is written to stdout.

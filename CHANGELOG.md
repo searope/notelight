@@ -8,6 +8,13 @@ format is detected and rebuilt by `notelight index`.
 
 ## [Unreleased]
 
+### Fixed
+
+- The CLI writes UTF-8 when its output is piped or redirected, on every OS.
+  On Windows it used the ANSI code page, so `notelight search > hits.txt` (or
+  `--json`, or a pipe from an MCP or script caller) crashed on a note with a
+  character outside it, such as CJK text, and `--json` was not valid UTF-8.
+
 ## [0.1.0] - 2026-10-16
 
 The first release on PyPI: `pip install notelight`. It covers milestones 0 to 5

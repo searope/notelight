@@ -356,8 +356,9 @@ def eval_(
     datasets: Annotated[
         list[str] | None,
         typer.Argument(
-            help="BEIR dataset names (scifact, nfcorpus, fiqa) or folders in the BEIR layout. "
-            "Default: all three.",
+            help="BEIR dataset names (scifact, nfcorpus, fiqa), notes (short queries over "
+            "notelight's own docs, bundled), or folders in the BEIR layout. "
+            "Default: the three BEIR datasets.",
             show_default=False,
         ),
     ] = None,
@@ -383,17 +384,39 @@ def eval_(
         int | None,
         typer.Option(min=1, help="Evaluate only the first N queries.", show_default=False),
     ] = None,
+    split: Annotated[
+        str,
+        typer.Option(
+            help="notes only: tune (for choosing settings), heldout (report once) or all."
+        ),
+    ] = "tune",
+    max_chars: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="notes only: chunk size to evaluate. Default: the indexer's (1200).",
+            show_default=False,
+        ),
+    ] = None,
     baseline: Annotated[
         bool, typer.Option("--baseline/--no-baseline", help="Also run the NumPy baseline.")
     ] = True,
     as_json: Annotated[bool, typer.Option("--json", help="Print results as JSON.")] = False,
     offline: OfflineOpt = False,
 ) -> None:
-    """Measure recall@k and nDCG@k of every retrieval method on BEIR datasets.
+    """Measure recall@k, nDCG@k and MRR@k of every retrieval method on BEIR
+    datasets or the bundled notes benchmark.
 
     Datasets and the model are downloaded once; corpus embeddings are cached.
     """
-    from notelight.eval import BEIR_DATASETS, METHODS, evaluate, format_markdown, load_dataset
+    from notelight.eval import (
+        BEIR_DATASETS,
+        METHODS,
+        NOTES_SPLITS,
+        evaluate,
+        format_markdown,
+        load_dataset,
+    )
     from notelight.eval.datasets import DatasetSpec
 
     name = embedder or "bge-small"
@@ -405,6 +428,8 @@ def eval_(
     unknown = [m for m in chosen if m not in METHODS]
     if unknown:
         _fail(f"unknown method(s) {', '.join(unknown)}; choose from {', '.join(METHODS)}", code=2)
+    if split not in NOTES_SPLITS:
+        _fail(f"unknown split {split}; choose from {', '.join(NOTES_SPLITS)}", code=2)
 
     def on_dataset_download(spec: DatasetSpec) -> None:
         typer.echo(f"Downloading {spec.name} ({spec.size / 1e6:.1f} MB, one time)...", err=True)
@@ -416,7 +441,13 @@ def eval_(
     results = []
     for target in datasets or list(BEIR_DATASETS):
         try:
-            data = load_dataset(target, offline=offline, on_download=on_dataset_download)
+            data = load_dataset(
+                target,
+                offline=offline,
+                on_download=on_dataset_download,
+                notes_split=split,
+                max_chars=max_chars,
+            )
             typer.echo(
                 f"{data.name}: {len(data.doc_ids):,} documents, {len(data.queries)} queries",
                 err=True,

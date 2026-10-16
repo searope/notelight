@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 
-__all__ = ["mean", "ndcg_at_k", "overlap_at_k", "recall_at_k"]
+__all__ = ["mean", "mrr_at_k", "ndcg_at_k", "overlap_at_k", "recall_at_k"]
 
 
 def recall_at_k(ranked: Sequence[str], relevant: Mapping[str, int], k: int) -> float:
@@ -47,6 +47,25 @@ def ndcg_at_k(ranked: Sequence[str], relevant: Mapping[str, int], k: int) -> flo
     ideal = sorted(relevant.values(), reverse=True)[:k]
     idcg = sum(grade / math.log2(rank + 1) for rank, grade in enumerate(ideal, start=1))
     return dcg / idcg
+
+
+def mrr_at_k(ranked: Sequence[str], relevant: Mapping[str, int], k: int) -> float:
+    """Reciprocal rank of the first relevant document in the top `k`, else 0.
+
+    Averaged over queries this is MRR@k: how far down the first useful
+    result is, which is what a person scanning a short list notices first.
+
+    Raises:
+        ValueError: `relevant` is empty or `k` < 1.
+    """
+    if not relevant:
+        raise ValueError("MRR is undefined for a query with no relevant documents")
+    if k < 1:
+        raise ValueError("k must be at least 1")
+    for rank, doc in enumerate(ranked[:k], start=1):
+        if doc in relevant:
+            return 1.0 / rank
+    return 0.0
 
 
 def overlap_at_k(a: Sequence[object], b: Sequence[object], k: int) -> float:

@@ -21,7 +21,8 @@ def _speed(ms: float) -> str:
 
 
 def format_markdown(results: Sequence[DatasetResult]) -> str:
-    """Quality, latency and Rust-vs-NumPy tables for one or more datasets."""
+    """Quality, latency and Rust-vs-NumPy tables for one or more datasets,
+    plus a per-style table for each dataset whose queries have styles."""
     if not results:
         return "No results."
     k = results[0].k
@@ -31,15 +32,33 @@ def format_markdown(results: Sequence[DatasetResult]) -> str:
     if methods:
         header = ["Method", *(f"{r.dataset} nDCG@{k}" for r in results)]
         header += [f"{r.dataset} R@{k}" for r in results]
+        header += [f"{r.dataset} MRR@{k}" for r in results]
         rows = [
             [
                 f"`{name}`",
                 *(f"{r.method(name).ndcg:.3f}" for r in results),
                 *(f"{r.method(name).recall:.3f}" for r in results),
+                *(f"{r.method(name).mrr:.3f}" for r in results),
             ]
             for name in methods
         ]
         parts.append(_table(header, rows))
+
+        for r in results:
+            styles = r.methods[0].by_style
+            if not styles:
+                continue
+            header = ["Method", *(f"{s.style} ({s.queries}) nDCG@{k}" for s in styles)]
+            header += [f"{s.style} R@{k}" for s in styles]
+            rows = [
+                [
+                    f"`{m.method}`",
+                    *(f"{s.ndcg:.3f}" for s in m.by_style),
+                    *(f"{s.recall:.3f}" for s in m.by_style),
+                ]
+                for m in r.methods
+            ]
+            parts.append(f"{r.dataset} by query style:\n\n{_table(header, rows)}")
 
         header = ["Method", *(f"{r.dataset} ms/query" for r in results)]
         rows = [[f"`{n}`", *(_speed(r.method(n).latency_ms) for r in results)] for n in methods]
@@ -63,6 +82,7 @@ def format_markdown(results: Sequence[DatasetResult]) -> str:
 
     sizes = ", ".join(f"{r.dataset} {r.docs:,} docs / {r.queries} queries" for r in results)
     parts.append(
-        f"Embedder `{results[0].embedder}`; {sizes}; {results[0].candidates} candidates re-scored."
+        f"Embedder `{results[0].embedder}`; {sizes}; {results[0].candidates} candidates "
+        f"re-scored; hybrid phrase_boost {results[0].phrase_boost:g}."
     )
     return "\n\n".join(parts) + "\n"

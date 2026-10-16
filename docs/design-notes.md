@@ -511,7 +511,59 @@ The bonus is aimed at the short, phrase-like queries people type into notes,
 which BEIR does not measure, so the rule is: it may not hurt BEIR. Quotes
 change BEIR slightly even at weight 0, because 33 of FiQA's 648 test queries
 contain quotes (`Why is “cheque cashing” a legitimate business?`), and those
-now act as phrases. See `docs/results.md`.
+now act as phrases. See `docs/results.md`. The notes benchmark (next section)
+later measured the short queries: there the bonus is worth 0.02 to 0.03
+nDCG@10. It lifts phrase and identifier queries and is mixed on keywords.
+
+## Notes benchmark decisions
+
+### A small benchmark of our own, labelled by line range
+
+BEIR cannot say whether the defaults suit notes: its queries are long
+questions, and its documents are already split. `notelight eval notes` adds
+82 short queries (keywords, identifiers and phrases, questions, paraphrases)
+over this repository's own Markdown, pinned to one commit. It ships inside
+the package (61 KB), so it runs offline, needs no checkout, and the tests can
+check its rules in CI. The corpus is the project's docs because they could
+be published and nobody's private notes were available; the cost is a
+technical, repetitive corpus that is not a personal notebook.
+
+Labels are `[path, line_start, line_end, grade]`, not chunk ids, so the same
+labels work at any `max_chars`. Scoring has to handle chunks that overlap
+several labelled passages, and passages split across chunks. Each ranked chunk
+is replaced by the labelled passages it shows for the first time, best grade
+first, and a chunk with none stays one non-relevant position
+(`Dataset.judged_ranking`). The standard nDCG, recall and MRR then apply
+unchanged. A passage counts once, so a big chunk cannot score above 1 by
+covering three passages, and a passage is found as soon as any part of it
+is shown, which is how a person reads a hit.
+
+### Honest by construction
+
+The queries and labels were written from the documents before any search
+ran, committed before the first one, and never edited after results were
+seen. Each query records the section it came from. Paraphrase queries must
+share no BM25 term with their answers, heading paths included, and a test
+enforces it (four were reworded before the commit to pass it). The split into tune and held-out halves alternates within each
+style and was fixed in the same commit. The decision rule was written down
+before the held-out run: change a default only if the held-out paired 95%
+bootstrap interval excludes zero and agrees with tune. The author was an LLM
+(Claude), which `docs/results.md` says next to the numbers.
+
+### The defaults held
+
+On the tune half, 600-character chunks with phrase weight 4 looked best
+(+0.022 hybrid nDCG@10 over 1200 and 1, interval −0.017 to +0.064). On the
+held-out half they scored 0.024 below the defaults (0.690 vs 0.715; 18
+queries worse, 11 better), and weight 4 matched weight 1 on every held-out
+query. So `max_chars` stays 1200 and `phrase_boost` stays 1. Two findings
+did hold on both halves: hybrid beats vector search alone (+0.076 held-out,
+interval 0.025 to 0.126), and turning the phrase bonus off loses 0.018 to
+0.032, on phrase and identifier queries (keyword queries are mixed). Fusion's weak spot is
+paraphrase, where BM25 contributes nothing and halves what the vectors find
+(5 queries per half, too few to act on). A tuned RRF weight or a
+query-style switch would be the thing to test if more paraphrase queries
+show the same.
 
 
 ## v2 spike: the core in the browser

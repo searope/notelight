@@ -30,6 +30,7 @@ from notelight.errors import DatasetNotAvailableError
 
 __all__ = [
     "BEIR_DATASETS",
+    "NOTES_NAME",
     "Dataset",
     "DatasetSpec",
     "ensure_dataset",
@@ -38,6 +39,9 @@ __all__ = [
 ]
 
 BEIR_BASE_URL = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets"
+
+#: Name of the bundled notes benchmark (`notelight.eval.notes`).
+NOTES_NAME = "notes"
 
 
 @dataclass(frozen=True)
@@ -95,6 +99,41 @@ class Dataset:
     qrels: dict[str, dict[str, int]]
     #: Hash of the corpus, queries and qrels files; keys cached embeddings.
     fingerprint: str = field(default="")
+    #: Each document's heading path; by default its title, if any.
+    heading_paths: list[list[str]] | None = None
+    #: Each document's (path, line_start, line_end); by default (doc id, 1, 1).
+    locations: list[tuple[str, int, int]] | None = None
+    #: Doc id -> the judged items it contains, when judgments are not per
+    #: document (the notes benchmark labels line ranges, and a chunk may
+    #: overlap several). None means every document is judged on its own.
+    covers: dict[str, tuple[str, ...]] | None = None
+    #: Query id -> query style, for per-style results; empty if not labelled.
+    query_styles: dict[str, str] = field(default_factory=dict)
+
+    def judged_ranking(self, ranked: list[str], relevant: dict[str, int]) -> list[str]:
+        """Turn a ranked list of doc ids into the ranked items `relevant` judges.
+
+        Without `covers` that is `ranked` itself. With it, each document is
+        replaced by the relevant items it contains that no earlier document
+        did, best grade first, and a document with none becomes one
+        non-relevant position. Each item then counts once, at the first
+        document that shows it, so the standard metrics apply and cannot
+        exceed 1, whatever the chunk size.
+        """
+        if self.covers is None:
+            return ranked
+        out: list[str] = []
+        seen: set[str] = set()
+        for doc in ranked:
+            new = [i for i in self.covers.get(doc, ()) if i in relevant and i not in seen]
+            if new:
+                new.sort(key=lambda i: -relevant[i])
+                out.extend(new)
+                seen.update(new)
+            else:
+                # Namespaced: a chunk id can equal a passage id ("a.md:3-9").
+                out.append(f"doc:{doc}")
+        return out
 
 
 def _safe_extract(archive: Path, dest: Path) -> None:
@@ -219,19 +258,36 @@ def load_dataset(
     cache_dir: Path | None = None,
     offline: bool = False,
     on_download: Callable[[DatasetSpec], None] | None = None,
+    notes_split: str = "tune",
+    max_chars: int | None = None,
 ) -> Dataset:
-    """Load a pinned BEIR dataset by name, or a BEIR-layout folder by path.
+    """Load a pinned BEIR dataset by name, the bundled `notes` benchmark, or a
+    BEIR-layout folder by path.
+
+    `notes_split` and `max_chars` apply to `notes` only (see
+    `notelight.eval.notes.load_notes`); BEIR documents are never re-chunked.
 
     Raises:
-        DatasetNotAvailableError: unknown name, missing folder, or a failed download.
+        DatasetNotAvailableError: unknown name, missing folder, a failed
+            download, or `max_chars` given for a BEIR dataset.
     """
+    if name_or_path == NOTES_NAME:
+        from notelight.eval.notes import load_notes  # notes imports this module
+
+        if max_chars is None:
+            return load_notes(split=notes_split)
+        return load_notes(split=notes_split, max_chars=max_chars)
+    if max_chars is not None:
+        raise DatasetNotAvailableError(
+            f"--max-chars applies to the {NOTES_NAME} benchmark only, not {name_or_path}"
+        )
     spec = BEIR_DATASETS.get(name_or_path)
     if spec is not None:
         folder = ensure_dataset(spec, cache_dir=cache_dir, offline=offline, on_download=on_download)
         return load_beir(folder, split=spec.split, name=spec.name)
     folder = Path(name_or_path)
     if not folder.is_dir():
-        known = ", ".join(BEIR_DATASETS)
+        known = ", ".join([*BEIR_DATASETS, NOTES_NAME])
         raise DatasetNotAvailableError(
             f"{name_or_path!r} is neither a known dataset ({known}) nor a folder"
         )

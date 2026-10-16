@@ -1,9 +1,9 @@
 # Results
 
 Retrieval quality and speed of every search method in notelight, measured on
-three [BEIR](https://github.com/beir-cellar/beir) datasets with
-`notelight eval`. Every number on this page comes from one run of that
-command; see [Reproducing](#reproducing).
+three [BEIR](https://github.com/beir-cellar/beir) datasets and on a small
+[notes benchmark](#notes-benchmark) with `notelight eval`. Every number on
+this page comes from runs of that command; see [Reproducing](#reproducing).
 
 ## Setup
 
@@ -54,7 +54,9 @@ What the table says:
   matches the vectors (SciFact) or beats both (NFCorpus). On FiQA, where BM25
   is 0.17 nDCG@10 behind, it drags the fused list down (0.351 vs 0.403). Notes, with their exact
   names, identifiers and error codes, are closer to the first case, which is
-  why hybrid stays the default, but the number is reported as it is.
+  why hybrid stays the default, but the number is reported as it is. The
+  [notes benchmark](#notes-benchmark) measures that case: there BM25 is
+  ahead of the vectors, and hybrid scores highest.
 - **BM25 has no stemming** (by design, see the design notes). Published
   BM25 (Anserini, with stemming) scores 0.665 / 0.325 / 0.236 nDCG@10 on these
   datasets; notelight's 0.678 / 0.305 / 0.238 is in the same range.
@@ -81,6 +83,139 @@ queries over notes, which BEIR does not measure; the bar here is that it
 does no harm. Among the evaluated (test) queries only FiQA has quotes: 33 of
 648, such as `Why is “cheque cashing” a legitimate business?`. They account
 for FiQA's +0.003 at weight 0.
+
+## Notes benchmark
+
+BEIR asks long questions of papers and forum posts. People search their notes
+differently: two keywords, an identifier, a quoted phrase, a short question.
+`notelight eval notes` measures that on a small, labelled benchmark bundled
+with the package (`python/notelight/eval/notes/`).
+
+### How it was built
+
+- **Corpus**: this repository's own Markdown at commit `6a9d410` (README,
+  CHANGELOG, CLAUDE.md, `docs/` and `docs/learning/`; 14 files), stored with a
+  SHA-256 per file. The default chunker cuts it into 229 chunks.
+- **Queries**: 82, in four styles: 28 keyword queries (1 to 4 words, such as
+  `mmap windows delete`), 22 exact phrases or identifiers (`SCHEMA_VERSION`,
+  `"lock file"`), 22 short questions (`what happens if a commit crashes
+  halfway?`), and 10 paraphrases that share no indexed term with their answer
+  (`stop two programs modifying simultaneously`, for the writer lock).
+- **Labels**: each query lists the passages that answer it (grade 2) or
+  partly answer it (grade 1), as a path and line range, 1 to 6 per query.
+  Labels are line ranges rather than chunk ids, so they hold for any chunk
+  size. A retrieved chunk counts for every labelled passage it overlaps, and
+  each passage counts once, at the first chunk that shows it.
+- **Process**: the queries and labels were written from what each section is
+  for, after reading every file and before any search ran over the corpus.
+  They were committed before the first search (commit `df61276`), and no
+  label was changed after seeing results. (Before that commit, four
+  paraphrases were reworded because a term-overlap check, not a search,
+  showed they shared a word with their answer.) Each query records the
+  section it came from. Within each style the queries alternate between a **tune** half
+  (41) and a **held-out** half (41), fixed when the file was written.
+- **Protocol**: settings were compared on the tune half only. The held-out
+  runs, and the rule for changing a default, were written down before the
+  held-out half was run once: change a default only if the held-out paired
+  95% bootstrap interval of the nDCG@10 difference excludes zero and agrees
+  with tune.
+
+**Limits.** The benchmark is small: 41 queries per half, and 5 paraphrases
+per half. Paired differences under about 0.04 nDCG@10 are within noise, and
+the two halves differ by 0.05 for the same settings. A single author wrote
+every query and label, and that author is an LLM (Claude), not a person
+searching their own notes. Queries written right after reading a document
+tend to reuse its words, which favours BM25; only the paraphrases avoid that
+by construction. The corpus is the project's own documentation, which is
+more technical and more repetitive than personal notes (the same design is
+described in the README, the design notes and a walkthrough). At 229 chunks,
+200 candidates re-score nearly everything, so this benchmark says nothing
+about the quantized candidate stage; BEIR covers that. Treat it as a check
+of the defaults on note-style queries, not as a general result.
+
+### Held-out results (default settings)
+
+`max_chars` 1200 and `phrase_boost` 1, run once:
+
+| Method | nDCG@10 | R@10 | MRR@10 |
+|---|---:|---:|---:|
+| `f32` (exact, reference) | 0.631 | 0.664 | 0.756 |
+| `int8` | 0.639 | 0.684 | 0.756 |
+| `binary` | 0.565 | 0.592 | 0.717 |
+| `binary+int8` | 0.639 | 0.684 | 0.756 |
+| `ternary+int8` (default) | 0.639 | 0.684 | 0.756 |
+| `bm25` | 0.667 | 0.752 | 0.692 |
+| `hybrid` (what `notelight search` returns) | **0.715** | **0.794** | **0.769** |
+
+nDCG@10 by query style (number of queries in brackets):
+
+| Method | keyword (14) | phrase (11) | question (11) | paraphrase (5) |
+|---|---:|---:|---:|---:|
+| `ternary+int8` | 0.699 | 0.753 | 0.622 | 0.257 |
+| `bm25` | 0.813 | 0.907 | 0.546 | 0.000 |
+| `hybrid` | 0.833 | 0.907 | 0.659 | 0.082 |
+
+The tune half, same settings, for comparison: `ternary+int8` 0.524,
+`bm25` 0.647, `hybrid` 0.663 nDCG@10.
+
+What the numbers say:
+
+- **Hybrid is the best default for notes.** It beats vector search alone on
+  both halves: by 0.076 nDCG@10 on held-out (95% CI 0.025 to 0.126; 24
+  queries better, 8 worse) and by 0.140 on tune. It is also ahead of BM25
+  alone on both halves (+0.047 held-out, +0.017 tune), but those intervals
+  include zero.
+- **Keywords carry note search.** Unlike on BEIR, BM25 alone beats the
+  embeddings here. It is far ahead on identifiers and phrases (0.907 vs
+  0.753), because a name like `IndexBusyError` means nothing to bge-small.
+  The vectors win on questions and paraphrases.
+- **Paraphrases are the weak spot.** With no shared word, BM25 scores 0, and
+  hybrid fusion halves what the vectors alone find (0.082 vs 0.257 nDCG@10,
+  on 5 queries). bge-small finds about half of these passages in its top 10,
+  but rarely first. That is the cost of fusion's equal weighting, and with 10
+  paraphrases in all it is a direction to watch, not a measured trade-off.
+- **The quantized searches are exact here.** At 229 chunks `ternary+int8`
+  and `binary+int8` return what exhaustive int8 does. `f32` is 0.008 below
+  int8 on held-out and 0.007 above on tune: quantization noise in both
+  directions.
+
+### Tuning: chunk size and phrase weight
+
+Hybrid nDCG@10 / MRR@10 on the **tune** half:
+
+| `max_chars` | chunks | `phrase_boost` 0 | 1 (default) | 4 |
+|---|---:|---:|---:|---:|
+| 600 | 374 | 0.648 / 0.793 | 0.676 / 0.804 | 0.685 / 0.816 |
+| **1200 (default)** | 229 | 0.631 / 0.740 | 0.663 / 0.732 | 0.672 / 0.743 |
+| 2000 | 186 | 0.622 / 0.733 | 0.656 / 0.734 | 0.665 / 0.746 |
+
+Against the defaults, no cell's 95% interval for nDCG@10 excludes zero. The
+best, 600 characters with weight 4, was +0.022 (−0.017 to +0.064). It went
+to the held-out check with the single-factor variants, each run once:
+
+| Hybrid on **held-out**, vs the defaults | nDCG@10 | difference (95% CI) | queries better / worse |
+|---|---:|---:|---:|
+| defaults: 1200, weight 1 | 0.715 | | |
+| 600, weight 4 (tune's best) | 0.690 | −0.024 (−0.069 to +0.016) | 11 / 18 |
+| 600, weight 1 | 0.690 | −0.024 (−0.069 to +0.016) | 11 / 18 |
+| 1200, weight 4 | 0.715 | 0.000 | 0 / 0 |
+| 1200, weight 0 (no bonus for terms in order) | 0.696 | −0.018 (−0.048 to +0.003) | 1 / 5 |
+
+- **The default chunk size holds.** Smaller chunks looked better on tune and
+  were worse on held-out, which is what noise looks like at 41 queries. They
+  do raise MRR on both halves (+0.073 tune, +0.022 held-out, neither
+  interval excluding zero), because a short chunk that hits ranks higher.
+  But it shows less context per hit and needs 63% more chunks to embed.
+- **The phrase bonus earns its place.** Weight 0 is worse on both halves
+  (−0.032 tune, −0.018 held-out). The losses are on phrases and
+  identifiers: without the bonus every phrase query that changed got worse
+  (6 on tune, 4 of 5 on held-out), including single identifiers such as
+  `IndexBusyError`, whose camelCase parts count as terms in order. On
+  keyword queries it is mixed (3 better, 3 worse on tune). Weight 4 changes
+  two tune queries (one up by 0.37, one down by 0.02) and no held-out query,
+  so 1 stays; BEIR showed no harm at 1.
+- No default changed. Differences are paired over the same queries (10,000
+  bootstrap resamples); the per-query scores are in `notelight eval --json`.
 
 ## Latency
 
@@ -162,7 +297,17 @@ The same four searches, implemented in NumPy the way a NumPy user would
 notelight eval                                 # all three datasets, all methods
 notelight eval scifact --methods f32,bm25      # a subset
 notelight eval path\to\beir-folder --json      # any folder in the BEIR layout
+
+# the notes benchmark: bundled, no download beyond the model
+notelight eval notes                                        # tune half, defaults
+notelight eval notes --max-chars 600 --phrase-boost 4       # one sweep cell
+notelight eval notes --split heldout                        # the held-out half
 ```
+
+Tune on the tune half. Run the held-out half once, for settings chosen
+beforehand, or it stops being held out. `--json` includes per-query scores
+for paired comparisons. The notes corpus is re-created from git with
+`python scripts/make_notes_corpus.py` (`--check` verifies the bundled copy).
 
 The first run downloads the datasets (23 MB, verified by SHA-256) and the
 model (134 MB), and embeds the corpora: about 6 minutes for SciFact, 5 for

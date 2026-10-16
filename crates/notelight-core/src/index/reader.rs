@@ -9,6 +9,8 @@ use super::{
 use crate::bm25::Bm25;
 use crate::error::{Error, Result};
 use crate::fuse::{DEFAULT_RRF_K, rrf};
+use crate::phrase::{PhraseQuery, match_terms};
+use crate::tokenize::tokenize;
 use crate::vectors::{VectorMode, Vectors};
 
 /// How to open an index.
@@ -24,6 +26,9 @@ impl Default for OpenOptions {
     }
 }
 
+/// Default [`SearchOpts::phrase_boost`], chosen on BEIR (see `docs/results.md`).
+pub const DEFAULT_PHRASE_BOOST: f32 = 1.0;
+
 /// Parameters for [`IndexReader::search`].
 #[derive(Debug, Clone, Copy)]
 pub struct SearchOpts {
@@ -36,6 +41,11 @@ pub struct SearchOpts {
     pub candidates: usize,
     /// RRF constant; see [`crate::fuse`].
     pub rrf_k: f32,
+    /// Bonus for a chunk that contains all query terms in order, in units of
+    /// a first place in one more ranked list: `phrase_boost / (rrf_k + 1)` is
+    /// added to its fused score. 0 turns the bonus off. Quoted phrases are
+    /// applied whatever this is; see [`crate::phrase`].
+    pub phrase_boost: f32,
 }
 
 impl Default for SearchOpts {
@@ -45,6 +55,7 @@ impl Default for SearchOpts {
             depth: 50,
             candidates: 200,
             rrf_k: DEFAULT_RRF_K,
+            phrase_boost: DEFAULT_PHRASE_BOOST,
         }
     }
 }
@@ -54,7 +65,7 @@ impl Default for SearchOpts {
 pub struct Hit {
     /// Chunk id; pass to [`IndexReader::chunk`].
     pub id: u32,
-    /// Fused RRF score (higher is better).
+    /// Fused RRF score plus any phrase bonus (higher is better).
     pub score: f32,
     /// 1-based rank in the BM25 list, if the chunk appeared there.
     pub bm25_rank: Option<u32>,
@@ -240,7 +251,12 @@ impl IndexReader {
     }
 
     /// Hybrid search: BM25 and (when `query_vec` is given) vector results,
-    /// fused with reciprocal rank fusion.
+    /// fused with reciprocal rank fusion, then adjusted for phrases.
+    ///
+    /// Chunks that contain every quoted phrase in `query_text` come first;
+    /// chunks with all query terms in order get [`SearchOpts::phrase_boost`].
+    /// Only the fused candidates (at most `2 * depth`) are checked, so a
+    /// phrase match that neither retriever found is not added.
     ///
     /// # Errors
     /// Fails if `query_vec` is given for a keyword-only index or has the
@@ -266,11 +282,48 @@ impl IndexReader {
             None => Vec::new(),
         };
 
+        let query = PhraseQuery::parse(query_text);
+        let phrases = query.has_quoted() || (query.has_sequence() && opts.phrase_boost > 0.0);
+        // Without phrases, fusion can stop at k; with them, any candidate may move up.
+        let limit = if phrases { usize::MAX } else { opts.k };
+        let mut fused: Vec<(u32, f32, bool)> = rrf(&[&bm25_ids, &vec_ids], opts.rrf_k, limit)
+            .into_iter()
+            .map(|(id, score)| (id, score, false))
+            .collect();
+        if phrases {
+            let bonus = opts.phrase_boost / (opts.rrf_k + 1.0);
+            for (id, score, quoted) in &mut fused {
+                // A chunk can only match a phrase if it has all of its terms,
+                // which the BM25 postings answer without reading the chunk.
+                let may_have_sequence = query.has_sequence()
+                    && opts.phrase_boost > 0.0
+                    && self.bm25.contains_all(*id, &query.terms);
+                let may_have_quoted = query.has_quoted()
+                    && query.quoted.iter().all(|p| self.bm25.contains_all(*id, p));
+                if !may_have_sequence && !may_have_quoted {
+                    continue;
+                }
+                let terms = tokenize(&super::search_text(&self.chunk(*id)?));
+                let m = match_terms(&query, &terms);
+                if m.sequence {
+                    *score += bonus;
+                }
+                *quoted = m.all_quoted;
+            }
+            // Quoted matches first, then by score, then by id (as `top_k` orders).
+            fused.sort_by(|a, b| {
+                b.2.cmp(&a.2)
+                    .then_with(|| b.1.total_cmp(&a.1))
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+            fused.truncate(opts.k);
+        }
+
         let rank_in =
             |list: &[u32], id: u32| list.iter().position(|&x| x == id).map(|p| p as u32 + 1);
-        Ok(rrf(&[&bm25_ids, &vec_ids], opts.rrf_k, opts.k)
+        Ok(fused
             .into_iter()
-            .map(|(id, score)| Hit {
+            .map(|(id, score, _)| Hit {
                 id,
                 score,
                 bm25_rank: rank_in(&bm25_ids, id),

@@ -210,8 +210,9 @@ impl<B: AsRef<[u8]>> Bm25<B> {
     }
 
     /// Check that offset tables are monotonic, terms are valid UTF-8 in
-    /// sorted order, and postings reference existing documents. Done once at
-    /// open time so queries can index without further checks.
+    /// sorted order, and each term's postings reference existing documents
+    /// in strictly increasing order. Done once at open time so queries can
+    /// index (and binary-search postings) without further checks.
     fn validate(&self) -> Result<()> {
         let data = self.bytes.as_ref();
         let mut prev_term: Option<&str> = None;
@@ -228,10 +229,17 @@ impl<B: AsRef<[u8]>> Bm25<B> {
             }
             prev_term = Some(term);
         }
-        let n_postings = self.post_offset(self.n_terms);
-        for i in 0..n_postings {
-            if u32_at(data, self.postings_at + 8 * i) as usize >= self.n_docs {
-                return Err(Error::format("bm25: posting references a missing document"));
+        for t in 0..self.n_terms {
+            let mut prev_doc: Option<u32> = None;
+            for i in self.post_offset(t)..self.post_offset(t + 1) {
+                let doc = u32_at(data, self.postings_at + 8 * i);
+                if doc as usize >= self.n_docs {
+                    return Err(Error::format("bm25: posting references a missing document"));
+                }
+                if prev_doc.is_some_and(|p| p >= doc) {
+                    return Err(Error::format("bm25: postings are not sorted by document"));
+                }
+                prev_doc = Some(doc);
             }
         }
         Ok(())
@@ -282,6 +290,27 @@ impl<B: AsRef<[u8]>> Bm25<B> {
     pub fn doc_freq(&self, term: &str) -> usize {
         self.find_term(term)
             .map_or(0, |t| self.post_offset(t + 1) - self.post_offset(t))
+    }
+
+    /// Whether document `doc` contains every one of `terms` (already
+    /// tokenized). A binary search per term over its sorted postings.
+    #[must_use]
+    pub fn contains_all(&self, doc: u32, terms: &[String]) -> bool {
+        let data = self.bytes.as_ref();
+        terms.iter().all(|term| {
+            self.find_term(term).is_some_and(|t| {
+                let (mut lo, mut hi) = (self.post_offset(t), self.post_offset(t + 1));
+                while lo < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    match u32_at(data, self.postings_at + 8 * mid).cmp(&doc) {
+                        std::cmp::Ordering::Less => lo = mid + 1,
+                        std::cmp::Ordering::Greater => hi = mid,
+                        std::cmp::Ordering::Equal => return true,
+                    }
+                }
+                false
+            })
+        })
     }
 
     /// Tokenize `query` and return the `k` best `(doc, score)` pairs.
@@ -367,6 +396,17 @@ mod tests {
     }
 
     #[test]
+    fn contains_all_checks_every_term() {
+        let idx = index(&["lock file here", "lock only", "file only"]);
+        let terms = |ws: &[&str]| ws.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert!(idx.contains_all(0, &terms(&["lock", "file"])));
+        assert!(!idx.contains_all(1, &terms(&["lock", "file"])));
+        assert!(idx.contains_all(2, &terms(&["file"])));
+        assert!(!idx.contains_all(2, &terms(&["missing"])));
+        assert!(idx.contains_all(1, &[]));
+    }
+
+    #[test]
     fn doc_freq_and_len() {
         let idx = index(&["a1 b2", "b2 c3", "c3"]);
         assert_eq!(idx.len(), 3);
@@ -390,5 +430,19 @@ mod tests {
         let last = bytes.len() - 8;
         bytes[last..last + 4].copy_from_slice(&99u32.to_le_bytes()); // doc id out of range
         assert!(Bm25::from_bytes(bytes).is_err());
+    }
+
+    #[test]
+    fn rejects_postings_out_of_document_order() {
+        let mut b = Bm25Builder::new();
+        b.add_text("shared");
+        b.add_text("shared");
+        let mut bytes = b.finish(Bm25Params::default()).unwrap();
+        // The only term's two postings are the last 16 bytes: (0, tf), (1, tf).
+        let first = bytes.len() - 16;
+        bytes[first..first + 4].copy_from_slice(&1u32.to_le_bytes());
+        bytes[first + 8..first + 12].copy_from_slice(&0u32.to_le_bytes());
+        let err = Bm25::from_bytes(bytes).unwrap_err();
+        assert!(err.to_string().contains("not sorted"), "{err}");
     }
 }

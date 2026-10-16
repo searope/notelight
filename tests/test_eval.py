@@ -12,6 +12,7 @@ import json
 import math
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -35,6 +36,7 @@ from notelight.eval import (
     ndcg_at_k,
     overlap_at_k,
     recall_at_k,
+    runner,
 )
 
 # --------------------------------------------------------------------------
@@ -314,6 +316,40 @@ def test_evaluate_caches_embeddings_and_index(beir_folder: Path, tmp_path: Path)
     result = evaluate(ds, second, methods=["f32", "hybrid"], baseline=False, cache_dir=cache)
     assert second.embedded == []
     assert result.queries == N_QUERIES
+
+
+def test_evaluate_passes_phrase_boost_to_hybrid(
+    beir_folder: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[float] = []
+
+    class SpyReader:
+        def __init__(self, inner: _core.IndexReader) -> None:
+            self._inner = inner
+
+        def search(self, *args: Any, **kwargs: Any) -> list[_core.Hit]:
+            seen.append(kwargs["phrase_boost"])
+            return self._inner.search(*args, **kwargs)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+    real_open = runner._open_or_build_index
+    monkeypatch.setattr(
+        runner, "_open_or_build_index", lambda *a, **kw: SpyReader(real_open(*a, **kw))
+    )
+    ds = load_beir(beir_folder)
+    for boost in (0.0, 2.5):
+        result = evaluate(
+            ds,
+            HashingEmbedder(64),
+            methods=["hybrid"],
+            baseline=False,
+            cache_dir=tmp_path / "cache",
+            phrase_boost=boost,
+        )
+        assert 0.0 <= result.method("hybrid").ndcg <= 1.0
+    assert set(seen) == {0.0, 2.5}
 
 
 def test_evaluate_rejects_unknown_methods(beir_folder: Path) -> None:

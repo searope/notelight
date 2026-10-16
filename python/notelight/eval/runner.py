@@ -47,6 +47,9 @@ __all__ = [
 
 F32 = npt.NDArray[np.float32]
 
+#: `IndexReader.search`'s default phrase bonus (the Rust core's `DEFAULT_PHRASE_BOOST`).
+DEFAULT_PHRASE_BOOST = 1.0
+
 #: Every method `evaluate` can run, in report order. `f32` is exact cosine
 #: similarity in NumPy (the quality ceiling for the vector methods); the four
 #: quantized modes are the Rust core's `VectorMode`s; `bm25` is keyword search
@@ -239,6 +242,7 @@ def evaluate(
     k: int = 10,
     candidates: int = 200,
     depth: int = 50,
+    phrase_boost: float = DEFAULT_PHRASE_BOOST,
     max_queries: int | None = None,
     baseline: bool = True,
     cache_dir: Path | None = None,
@@ -247,8 +251,9 @@ def evaluate(
     """Score `methods` on `dataset` with recall@k and nDCG@k.
 
     `candidates` is the number of binary or ternary candidates re-scored with
-    int8 codes, and `depth` the number of results each retriever contributes
-    to hybrid fusion; the defaults are the ones `notelight search` uses.
+    int8 codes, `depth` the number of results each retriever contributes
+    to hybrid fusion, and `phrase_boost` the hybrid bonus for query terms in
+    order (0 turns it off); the defaults are the ones `notelight search` uses.
     `max_queries` evaluates only the first queries, for quick runs. With
     `baseline`, the searches in `BASELINE_SEARCHES` also run in NumPy.
 
@@ -271,7 +276,9 @@ def evaluate(
         if method == "bm25":
             return [i for i, _ in reader.search_bm25(text, k)]
         if method == "hybrid":
-            hits = reader.search(text, vec if has_vec else None, k=k, depth=depth)
+            hits = reader.search(
+                text, vec if has_vec else None, k=k, depth=depth, phrase_boost=phrase_boost
+            )
             return [h.id for h in hits]
         if not has_vec:
             return []

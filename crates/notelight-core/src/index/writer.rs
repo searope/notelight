@@ -85,10 +85,7 @@ impl IndexWriter {
             (None, None) => {}
         }
         let id = self.docs.add(record)?;
-        let mut text = record.heading_path.join(" ");
-        text.push('\n');
-        text.push_str(&record.text);
-        self.bm25.add_text(&text);
+        self.bm25.add_text(&super::search_text(record));
         Ok(id)
     }
 

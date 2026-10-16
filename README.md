@@ -22,7 +22,8 @@ Tools that let you "chat with your files" usually need a server, an account, or
 an upload. notelight keeps everything on your machine:
 
 - **Hybrid retrieval.** BM25 plus quantized embeddings, fused with Reciprocal
-  Rank Fusion, so both exact names and paraphrased questions work.
+  Rank Fusion, so both exact names and paraphrased questions work. Quote a
+  phrase (`"lock file"`) to put exact matches first.
 - **Agent-ready.** An MCP server lets Claude, Copilot or Cursor search your notes
   and cite `path:line`.
 - **Measured.** `notelight eval` reports recall@10 and nDCG@10 on BEIR datasets
@@ -72,7 +73,7 @@ re-run takes about as long as starting the CLI (0.5 s for the folder above).
 | Command | What it does |
 |---|---|
 | `notelight index <folder>` | create or update the index for a folder |
-| `notelight search "<query>" [-k 10] [--json] [-f <folder>]` | hybrid search; `--json` returns path, line range, heading path and text for scripts and agents |
+| `notelight search "<query>" [-k 10] [--json] [-f <folder>]` | hybrid search; `--json` returns path, line range, heading path and text for scripts and agents; quote exact phrases: `'"lock file" windows'` |
 | `notelight status [<folder>] [--json]` | list indexed folders, sizes, embedders and generations |
 | `notelight mcp [-f <folder>]...` | run the MCP server over stdio for AI agents ([below](#use-with-claude--cursor)) |
 | `notelight serve [-f <folder>]... [--port 8765] [--open]` | search in your browser on localhost; needs `pip install "notelight[web]"` ([below](#web-ui)) |
@@ -287,7 +288,7 @@ recall@10, latency and the setup):
 | Binary candidates + int8 rescore | 0.703 | 0.341 | 0.399 |
 | **Ternary candidates + int8 rescore (default)** | 0.711 | 0.342 | 0.403 |
 | BM25 alone | 0.678 | 0.305 | 0.238 |
-| **Hybrid: BM25 + vectors, RRF (`notelight search`)** | 0.710 | 0.350 | 0.349 |
+| **Hybrid: BM25 + vectors, RRF (`notelight search`)** | 0.712 | 0.350 | 0.351 |
 
 The default vector search, ternary candidates re-scored with int8, matches
 exhaustive int8 to three decimals and is within 0.002 of exact float32

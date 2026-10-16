@@ -327,7 +327,7 @@ class NotesService:
 
         Folders are merged by each hit's rank within its own folder, then by
         score among hits of equal rank. Ranking by score alone would bury
-        keyword-only folders: their fused scores top out at half of what a
+        keyword-only folders: their fused scores top out well below what a
         hybrid index can reach. With all
         folders, a folder that cannot be searched is reported in `skipped`
         instead of failing the whole call.
@@ -570,7 +570,9 @@ def create_server(service: NotesService) -> MCPServer:
         """Search the user's indexed notes (hybrid keyword + semantic search).
 
         Args:
-            query: what to look for, in natural language or keywords.
+            query: what to look for, in natural language or keywords. Put an
+                exact phrase in double quotes ("lock file") to rank chunks
+                containing it first.
             k: number of results (1-50).
             folder: an indexed folder from `list_sources`; omit to search all of them.
         """

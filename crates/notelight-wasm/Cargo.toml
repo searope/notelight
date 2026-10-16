@@ -18,12 +18,11 @@ crate-type = ["cdylib", "rlib"]
 notelight-core = { path = "../notelight-core" }
 serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.6"
+# Manifest metadata arrives from JavaScript as a JSON string.
+serde_json = "1"
 # `scripts/build_wasm.py` needs wasm-bindgen-cli at exactly this version;
 # keep them in step (Cargo.lock pins the patch release).
 wasm-bindgen = "0.2.129"
-
-[dev-dependencies]
-serde_json = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 js-sys = "0.3"

@@ -126,3 +126,65 @@ fn errors_become_exceptions() {
     // The manifest declares vectors.bin, so it cannot be left out.
     assert!(Index::new(MANIFEST, DOCS.to_vec(), BM25.to_vec(), None).is_err());
 }
+
+#[wasm_bindgen_test]
+fn chunk_text_returns_plain_objects() {
+    let text = "# Title\n\nIntro.\n\n## Install\n\nRun it.\n";
+    let chunks = array(&notelight_wasm::chunk_text(text, 1200, true).unwrap());
+    assert!(chunks.length() > 0);
+    let last = chunks.get(chunks.length() - 1);
+    let headings = array(&get(&last, "headingPath"));
+    assert_eq!(headings.get(1).as_string().as_deref(), Some("Install"));
+    assert!(get(&last, "lineStart").as_f64().unwrap() >= 1.0);
+    assert!(get(&last, "path").is_undefined());
+    assert!(notelight_wasm::chunk_text(text, 0, true).is_err());
+}
+
+#[wasm_bindgen_test]
+fn writer_rebuilds_the_sample_byte_for_byte() {
+    // The sample's chunks, added in id order without vectors, give exactly
+    // the docs.bin and bm25.bin the Python CLI wrote.
+    let idx = sample();
+    let mut w = notelight_wasm::Writer::new(0, None, Some(r#"{"source": "docs"}"#.into())).unwrap();
+    for id in 0..u32::try_from(idx.length()).unwrap() {
+        let c = idx.record(id).unwrap();
+        let added = w
+            .add(
+                &c.path,
+                c.heading_path,
+                c.line_start,
+                c.line_end,
+                &c.text,
+                None,
+            )
+            .unwrap();
+        assert_eq!(added, id);
+    }
+    let g = w.build(3).unwrap();
+    assert_eq!(g.docs(), DOCS);
+    assert_eq!(g.bm25(), BM25);
+    assert!(g.vectors().is_none());
+    let rebuilt = Index::new(&g.manifest(), g.docs(), g.bm25(), None).unwrap();
+    assert_eq!(rebuilt.generation(), 3);
+    assert_eq!(
+        rebuilt.hits_bm25("generation", 10),
+        idx.hits_bm25("generation", 10)
+    );
+}
+
+#[wasm_bindgen_test]
+fn writer_errors_become_exceptions() {
+    assert!(notelight_wasm::Writer::new(384, None, None).is_err());
+    assert!(notelight_wasm::Writer::new(0, None, Some("not json".into())).is_err());
+    let mut w = notelight_wasm::Writer::new(2, Some("m".into()), None).unwrap();
+    assert!(w.add("a.md", vec![], 1, 1, "text", None).is_err());
+    assert!(
+        w.add("a.md", vec![], 1, 1, "text", Some(vec![1.0]))
+            .is_err()
+    );
+    assert_eq!(
+        w.add("a.md", vec![], 1, 1, "text", Some(vec![1.0, 0.0]))
+            .unwrap(),
+        0
+    );
+}

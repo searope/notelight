@@ -1,13 +1,16 @@
-// Query embeddings in the browser: the same model contract as
+// Embeddings in the browser: the same model contract as
 // python/notelight/embed.py, so a query embedded here searches an index the
-// Python CLI built with its default embedder.
+// Python CLI built with its default embedder, and documents embedded here
+// (the in-browser indexer) get the vectors the CLI would give them.
 //
 // - bge-small-en-v1.5 pinned to one revision; onnx/model.onnx and
 //   tokenizer.json are checked against their size and SHA-256 (Web Crypto)
 //   before use, on every load, cached or not;
 // - the bge query prefix, CLS pooling, L2 normalization;
 // - `modelId` equals the Python one, and an index built with another
-//   embedder is refused (`checkIndexEmbedder`).
+//   embedder is refused (`checkIndexEmbedder`);
+// - documents without the prefix, batched as `OnnxEmbedder.embed_documents`
+//   batches them (sorted by length, 32 per batch, padded on the right).
 //
 // The ONNX runtime is passed in (onnxruntime-web, vendored by
 // scripts/vendor_ort.py), and so are `fetch` and the cache, so this module
@@ -98,12 +101,18 @@ export async function verify(file, bytes) {
 
 /**
  * A model cache over the browser's Cache API, or null where there is none
- * (Node, or a page that is not a secure context). Only verified bytes are
- * stored, and they are verified again when read.
+ * (Node, a page that is not a secure context, or storage the browser refuses
+ * to open; the model is then downloaded on every load). Only verified bytes
+ * are stored, and they are verified again when read.
  */
 export async function browserCache(name = "notelight-models") {
   if (!globalThis.caches) return null;
-  const cache = await caches.open(name);
+  let cache;
+  try {
+    cache = await caches.open(name);
+  } catch {
+    return null;
+  }
   return {
     async get(url) {
       const hit = await cache.match(url);
@@ -177,7 +186,10 @@ export function l2Normalize(v) {
   return Float32Array.from(v, (x) => x / norm);
 }
 
-/** bge-small query embeddings with onnxruntime-web. */
+/** Run batches of at most this many texts, as `OnnxEmbedder(batch_size=32)`. */
+export const DOCUMENT_BATCH = 32;
+
+/** bge-small query and document embeddings with onnxruntime-web. */
 export class QueryEmbedder {
   #session;
   #tokenizer;
@@ -248,21 +260,68 @@ export class QueryEmbedder {
 
   /** Embed a search query: prefix, tokenize, run, CLS-pool, normalize. */
   async embedQuery(text) {
-    const enc = this.#tokenizer.encode(this.spec.queryPrefix + text);
-    const n = enc.ids.length;
-    const tensor = (values) =>
-      new this.#ort.Tensor("int64", BigInt64Array.from(values, BigInt), [1, n]);
+    const [vector] = await this.#run([this.spec.queryPrefix + text]);
+    return vector;
+  }
+
+  /**
+   * Embed document chunks (no prefix), as `OnnxEmbedder.embed_documents`
+   * does: texts sorted by length (in code points, stable) so each batch pads
+   * little, `batchSize` per run. Returns one vector per text, in input order.
+   * `onBatch(done)` is called after each run with the number of texts done
+   * so far; it may throw to stop.
+   * @param {string[]} texts
+   * @returns {Promise<Float32Array[]>}
+   */
+  async embedDocuments(texts, { batchSize = DOCUMENT_BATCH, onBatch } = {}) {
+    const length = (s) => {
+      let n = 0;
+      for (const _ of s) n++;
+      return n;
+    };
+    const lengths = texts.map(length);
+    const order = texts.map((_, i) => i).sort((a, b) => lengths[a] - lengths[b]);
+    const out = new Array(texts.length);
+    for (let start = 0; start < order.length; start += batchSize) {
+      const idx = order.slice(start, start + batchSize);
+      const vectors = await this.#run(idx.map((i) => texts[i]));
+      idx.forEach((i, j) => {
+        out[i] = vectors[j];
+      });
+      onBatch?.(Math.min(start + batchSize, order.length));
+    }
+    return out;
+  }
+
+  /**
+   * Tokenize `texts` (padded on the right to the longest, as
+   * `enable_padding()` does), run the model once, CLS-pool and normalize.
+   */
+  async #run(texts) {
+    const encs = texts.map((t) => this.#tokenizer.encode(t));
+    const n = Math.max(...encs.map((e) => e.ids.length));
+    const b = encs.length;
+    const tensor = (field) => {
+      const data = new BigInt64Array(b * n); // padding: id 0, mask 0, type 0
+      encs.forEach((e, row) => {
+        e[field].forEach((v, col) => {
+          data[row * n + col] = BigInt(v);
+        });
+      });
+      return new this.#ort.Tensor("int64", data, [b, n]);
+    };
     const all = {
-      input_ids: tensor(enc.ids),
-      attention_mask: tensor(enc.attentionMask),
-      token_type_ids: tensor(enc.typeIds),
+      input_ids: tensor("ids"),
+      attention_mask: tensor("attentionMask"),
+      token_type_ids: tensor("typeIds"),
     };
     const feeds = Object.fromEntries(this.#session.inputNames.map((name) => [name, all[name]]));
     const outputs = await this.#session.run(feeds);
-    const hidden = outputs[this.#session.outputNames[0]]; // (1, n, dim)
-    const cls = l2Normalize(hidden.data.subarray(0, this.dim));
+    const hidden = outputs[this.#session.outputNames[0]]; // (b, n, dim)
+    const vectors = encs.map((_, row) => l2Normalize(hidden.data.subarray(row * n * this.dim, (row * n + 1) * this.dim)));
     for (const t of Object.values(outputs)) t.dispose?.();
-    return cls;
+    for (const t of Object.values(all)) t.dispose?.();
+    return vectors;
   }
 
   /** Release the ONNX Runtime session. */

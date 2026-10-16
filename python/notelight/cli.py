@@ -147,7 +147,13 @@ def _pick_folder(folder: Path | None) -> Path:
 
 @app.command()
 def search(
-    query: Annotated[str, typer.Argument(help="What to look for.", show_default=False)],
+    query: Annotated[
+        str,
+        typer.Argument(
+            help="What to look for. Quote exact phrases: '\"lock file\" windows'.",
+            show_default=False,
+        ),
+    ],
     folder: Annotated[
         Path | None,
         typer.Option(
@@ -330,6 +336,10 @@ def eval_(
     candidates: Annotated[
         int, typer.Option(min=1, help="Binary/ternary candidates re-scored with int8.")
     ] = 200,
+    phrase_boost: Annotated[
+        float,
+        typer.Option(min=0.0, help="Hybrid bonus for query terms in order; 0 turns it off."),
+    ] = 1.0,
     max_queries: Annotated[
         int | None,
         typer.Option(min=1, help="Evaluate only the first N queries.", show_default=False),
@@ -379,6 +389,7 @@ def eval_(
                     methods=chosen,
                     k=k,
                     candidates=candidates,
+                    phrase_boost=phrase_boost,
                     max_queries=max_queries,
                     baseline=baseline,
                     progress=progress,

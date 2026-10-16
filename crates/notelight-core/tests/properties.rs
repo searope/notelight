@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use notelight_core::bm25::{Bm25, Bm25Builder, Bm25Params};
 use notelight_core::chunk::{ChunkOpts, chunk_text};
+use notelight_core::phrase::{PhraseQuery, contains_sequence};
 use notelight_core::quant::{
     TERNARY_THRESHOLD, dot_f32_i8, hamming, l2_normalized, quantize_binary, quantize_int8,
     ternary_dot, ternary_mask,
@@ -72,6 +73,30 @@ proptest! {
     }
 
     #[test]
+    fn contains_sequence_matches_a_string_search(
+        hay in prop::collection::vec("[abc]", 0..30),
+        needle in prop::collection::vec("[abc]", 1..4),
+    ) {
+        // Reference: single-letter words joined by spaces, searched as text.
+        let text = format!(" {} ", hay.join(" "));
+        let expected = text.contains(&format!(" {} ", needle.join(" ")));
+        prop_assert_eq!(contains_sequence(&hay, &needle), expected);
+    }
+
+    #[test]
+    fn a_planted_phrase_is_always_found(
+        before in "[a-z ]{0,60}",
+        phrase in "[a-z]{2,8}( [a-z]{2,8}){1,3}",
+        after in "[a-z ]{0,60}",
+    ) {
+        let query = PhraseQuery::parse(&format!("\"{phrase}\""));
+        let chunk = tokenize(&format!("{before} {phrase} {after}"));
+        for quoted in &query.quoted {
+            prop_assert!(contains_sequence(&chunk, quoted));
+        }
+    }
+
+    #[test]
     fn binary_codes_match_reference_and_hamming_is_a_metric(
         a in prop::collection::vec(-1.0f32..1.0, 1..200),
         seed in any::<u64>(),
@@ -132,6 +157,22 @@ proptest! {
         reference.sort_by_key(|&i| (dists[i as usize], i));
         reference.truncate(k);
         prop_assert_eq!(smallest_k_by_histogram(&dists, k), reference);
+    }
+
+    #[test]
+    fn contains_all_matches_a_naive_reference(
+        docs in prop::collection::vec(prop::collection::vec("[a-e]{2}", 0..12), 1..30),
+        terms in prop::collection::vec("[a-f]{2}", 0..4),
+    ) {
+        let mut builder = Bm25Builder::new();
+        for d in &docs {
+            builder.add_tokens(d);
+        }
+        let index = Bm25::from_bytes(builder.finish(Bm25Params::default()).unwrap()).unwrap();
+        for (i, d) in docs.iter().enumerate() {
+            let expected = terms.iter().all(|t| d.contains(t));
+            prop_assert_eq!(index.contains_all(i as u32, &terms), expected);
+        }
     }
 
     #[test]

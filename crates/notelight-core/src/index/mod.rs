@@ -28,7 +28,7 @@ mod writer;
 
 pub use docs::{ChunkRecord, Docs, DocsBuilder};
 pub use manifest::{Bm25Settings, FORMAT_NAME, Manifest, SCHEMA_VERSION};
-pub use reader::{Hit, IndexReader, OpenOptions, SearchOpts};
+pub use reader::{DEFAULT_PHRASE_BOOST, Hit, IndexReader, OpenOptions, SearchOpts};
 pub use storage::Storage;
 pub use writer::{CommitInfo, IndexWriter, WriterOptions};
 
@@ -48,6 +48,16 @@ pub const BM25_FILE: &str = "bm25.bin";
 pub const VECTORS_FILE: &str = "vectors.bin";
 
 const GEN_PREFIX: &str = "gen-";
+
+/// The text BM25 indexes for a chunk: its heading path, then its text, so a
+/// query for a section title matches the chunks under it. Phrase matching
+/// reads the same text.
+pub(crate) fn search_text(record: &ChunkRecord) -> String {
+    let mut text = record.heading_path.join(" ");
+    text.push('\n');
+    text.push_str(&record.text);
+    text
+}
 
 /// Directory name for generation `n`, zero-padded so names sort numerically.
 #[must_use]

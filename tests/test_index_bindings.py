@@ -81,6 +81,21 @@ def test_keyword_only_index(tmp_path: Path) -> None:
         r.search("words", _vec(1, 0, 0))
 
 
+def test_phrases_reorder_hybrid_results(tmp_path: Path) -> None:
+    w = _core.IndexWriter(0)
+    texts = [
+        "The lock is held during commit. A lock per file; file and lock state, each file closed.",
+        "One writer, enforced with a lock file.",
+    ]
+    for i, text in enumerate(texts):
+        w.add(_core.ChunkRecord(f"{i}.md", [], 1, 1, text))
+    w.commit(tmp_path)
+    r = _core.IndexReader.open(tmp_path)
+    assert r.search("lock file", phrase_boost=0.0)[0].id == 0
+    assert r.search("lock file")[0].id == 1
+    assert r.search('"lock file"', phrase_boost=0.0)[0].id == 1
+
+
 def test_writer_is_single_use(tmp_path: Path) -> None:
     w = _core.IndexWriter(0)
     w.commit(tmp_path)

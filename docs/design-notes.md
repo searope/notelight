@@ -462,3 +462,54 @@ still carry `Host: evil.example`, so a middleware refuses any request whose
 The API is GET-only and sends no CORS headers, so other origins cannot read
 its responses.
 
+## Phrase search decisions
+
+### Quoted phrases first, and a bonus for terms in order
+
+BM25 scores a query as a bag of words, and the embeddings rank by meaning, so
+neither notices that a chunk contains the query's words side by side. A chunk
+that repeats "lock" and "file" in separate sentences could outrank the one
+that says "lock file". Two rules now run after fusion, in the core
+(`phrase.rs`, applied in `IndexReader::search`):
+
+- **Quoted phrases are a hard tier.** `"lock file" windows` puts every chunk
+  containing all quoted phrases above every chunk that does not, keeping the
+  fused order within each tier. Straight and curly quotes both count, and an
+  unclosed quote runs to the end of the query, because phones insert curly
+  quotes and people forget the closing one.
+- **Terms in order earn a bonus, quoted or not.** If a query has two or more
+  terms and a chunk contains all of them consecutively and in order, its
+  fused score gains `phrase_boost / (rrf_k + 1)`: as much as one more first
+  place in RRF. The default weight is 1.
+
+Phrases are compared as sequences of BM25 terms (the same tokenizer, over
+the heading path and the text, as indexed), so case, punctuation and
+stopwords do not break a match: `"lock-file"` matches "Lock file", and
+`"lock the file"` matches "lock a file". Only fused candidates (at most 50
+per retriever) are re-ranked. A phrase match that neither retriever found
+stays missing, but every chunk containing the phrase also contains its terms,
+so BM25 nearly always finds it.
+
+### Cheap enough to always run
+
+Re-reading and re-tokenizing every candidate made hybrid search 40x slower
+on BEIR (about 7 ms per query instead of 0.2 ms). Most candidates cannot
+match, because they lack at least one query term, and the BM25 postings
+already know that: each term's postings are sorted by document id, so
+`Bm25::contains_all` is one binary search per term. Only chunks that contain
+every term are read and tokenized. That brings the cost back to noise on
+BEIR, and to 0.03 to 0.3 ms per query on this repository's docs, against
+about 5 ms to embed the query. The sort order was always part of the format;
+opening an index now also checks it.
+
+### Measured, and neutral on BEIR
+
+`notelight eval --phrase-boost` sweeps the weight. On SciFact, NFCorpus and
+FiQA, nDCG@10 moves by at most 0.002 at any weight from 0.5 to 4, because
+their queries are long questions whose terms almost never appear in order.
+The bonus is aimed at the short, phrase-like queries people type into notes,
+which BEIR does not measure, so the rule is: it may not hurt BEIR. Quotes
+change BEIR slightly even at weight 0, because 33 of FiQA's 648 test queries
+contain quotes (`Why is “cheque cashing” a legitimate business?`), and those
+now act as phrases. See `docs/results.md`.
+

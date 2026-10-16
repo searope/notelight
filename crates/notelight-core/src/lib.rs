@@ -8,6 +8,7 @@
 //! - [`bm25`]: keyword search over a serialized inverted index
 //! - [`quant`] and [`vectors`]: binary + int8 vector search
 //! - [`fuse`]: reciprocal rank fusion of the two
+//! - [`phrase`]: quoted phrases and the in-order bonus applied after fusion
 //! - [`index`]: the on-disk index (manifest, files, atomic generations)
 
 pub(crate) mod bin_format;
@@ -16,6 +17,7 @@ pub mod chunk;
 pub mod error;
 pub mod fuse;
 pub mod index;
+pub mod phrase;
 pub mod quant;
 pub mod tokenize;
 pub mod topk;

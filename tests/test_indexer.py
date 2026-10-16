@@ -116,6 +116,13 @@ def test_switching_embedder_rebuilds(notes: Path, embedder: CountingEmbedder) ->
     assert Searcher(notes, other).manifest["embedder"] == other.model_id
 
 
+def test_quoted_phrase_ranks_first(notes: Path, embedder: CountingEmbedder) -> None:
+    sync(notes, embedder)
+    (top, *_) = Searcher(notes, embedder).search('"single owner"', k=3)
+    assert top.path == "rust/ownership.md"
+    assert "single owner" in top.text
+
+
 def test_search_with_different_embedder_is_refused(notes: Path, embedder: CountingEmbedder) -> None:
     sync(notes, embedder)
     with pytest.raises(EmbedderMismatchError, match=embedder.model_id):

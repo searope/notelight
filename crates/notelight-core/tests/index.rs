@@ -289,3 +289,113 @@ fn leftovers_from_failed_commits_are_swept_and_live_generation_kept() {
     assert_eq!(r.manifest().generation, 3);
     assert_eq!(r.len(), 4);
 }
+
+/// A keyword-only index over `texts`, one chunk each, with no headings.
+fn phrase_index(root: &std::path::Path, texts: &[&str]) -> IndexReader {
+    let mut w = IndexWriter::new(WriterOptions::default());
+    for (i, text) in texts.iter().enumerate() {
+        w.add(&record(&format!("{i}.md"), &[], text), None).unwrap();
+    }
+    w.commit(root).unwrap();
+    IndexReader::open(root, OpenOptions::default()).unwrap()
+}
+
+fn ids(hits: &[index::Hit]) -> Vec<u32> {
+    hits.iter().map(|h| h.id).collect()
+}
+
+const SCATTERED_FIRST: &[&str] = &[
+    // Both terms, repeated, but never next to each other: BM25's favourite.
+    "The lock is held while the commit runs. A lock protects each file. File \
+     handles and lock state are checked; every file is closed.",
+    "Other notes about the build cache.",
+    // The exact phrase, once.
+    "One writer, enforced with a lock file in the index root.",
+];
+
+#[test]
+fn in_order_terms_get_a_bonus() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = phrase_index(dir.path(), SCATTERED_FIRST);
+    let off = SearchOpts {
+        phrase_boost: 0.0,
+        ..SearchOpts::default()
+    };
+    assert_eq!(ids(&r.search("lock file", None, &off).unwrap())[0], 0);
+    let hits = r.search("lock file", None, &SearchOpts::default()).unwrap();
+    assert_eq!(ids(&hits)[..2], [2, 0]);
+    // The bonus is one extra first place: 1 / (rrf_k + 1).
+    let base = r.search("lock file", None, &off).unwrap();
+    let before = base.iter().find(|h| h.id == 2).unwrap().score;
+    assert!((hits[0].score - before - 1.0 / 61.0).abs() < 1e-6);
+    // Reversed terms are not in order anywhere, so nothing moves.
+    let reversed = r.search("file lock", None, &SearchOpts::default()).unwrap();
+    assert_eq!(
+        ids(&reversed),
+        ids(&r.search("file lock", None, &off).unwrap())
+    );
+}
+
+#[test]
+fn quoted_phrases_rank_first_even_without_the_bonus() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = phrase_index(dir.path(), SCATTERED_FIRST);
+    let off = SearchOpts {
+        phrase_boost: 0.0,
+        ..SearchOpts::default()
+    };
+    // Quotes can be curly, and the phrase ignores case and punctuation.
+    for query in [r#""lock file""#, "“Lock-File”", r#"commit "lock file""#] {
+        let hits = r.search(query, None, &off).unwrap();
+        assert_eq!(hits[0].id, 2, "{query}");
+    }
+    // A quoted phrase nothing contains leaves the fused order alone.
+    assert_eq!(
+        ids(&r.search(r#""lock commit""#, None, &off).unwrap()),
+        ids(&r.search("lock commit", None, &off).unwrap())
+    );
+}
+
+#[test]
+fn every_quoted_phrase_must_match_and_k_still_applies() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = phrase_index(
+        dir.path(),
+        &[
+            "lock file and commit protocol",
+            "lock file only, lock file again",
+            "commit protocol only",
+        ],
+    );
+    let hits = r
+        .search(
+            r#""lock file" "commit protocol""#,
+            None,
+            &SearchOpts {
+                k: 1,
+                ..SearchOpts::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(ids(&hits), [0]);
+}
+
+#[test]
+fn phrases_match_headings_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = IndexWriter::new(WriterOptions::default());
+    w.add(
+        &record("a.md", &[], "lock here, file there, lock file nowhere"),
+        None,
+    )
+    .unwrap();
+    w.add(&record("b.md", &["Writer lock"], "File handles."), None)
+        .unwrap();
+    w.commit(dir.path()).unwrap();
+    let r = IndexReader::open(dir.path(), OpenOptions::default()).unwrap();
+    // "Writer lock" + "\n" + "File handles." reads as "writer lock file handles".
+    let hits = r
+        .search(r#""writer lock""#, None, &SearchOpts::default())
+        .unwrap();
+    assert_eq!(hits[0].id, 1);
+}

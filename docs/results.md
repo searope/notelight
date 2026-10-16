@@ -29,7 +29,7 @@ The embedder truncates documents at 512 tokens; BM25 sees the full text.
 | `binary+int8` | 0.703 | 0.341 | 0.399 | 0.821 | 0.160 | 0.457 |
 | `ternary+int8` (default) | 0.711 | 0.342 | 0.403 | 0.840 | 0.161 | 0.463 |
 | `bm25` | 0.678 | 0.305 | 0.238 | 0.803 | 0.146 | 0.296 |
-| `hybrid` (what `notelight search` returns) | 0.710 | 0.350 | 0.349 | 0.839 | 0.165 | 0.424 |
+| `hybrid` (what `notelight search` returns) | 0.712 | 0.350 | 0.351 | 0.839 | 0.165 | 0.426 |
 
 What the table says:
 
@@ -52,12 +52,35 @@ What the table says:
 - **Hybrid is not a free win.** RRF gives each retriever equal say. Where
   BM25 is nearly as good as the embeddings (SciFact, NFCorpus), the fusion
   matches the vectors (SciFact) or beats both (NFCorpus). On FiQA, where BM25
-  is 0.17 nDCG@10 behind, it drags the fused list down (0.349 vs 0.403). Notes, with their exact
+  is 0.17 nDCG@10 behind, it drags the fused list down (0.351 vs 0.403). Notes, with their exact
   names, identifiers and error codes, are closer to the first case, which is
   why hybrid stays the default, but the number is reported as it is.
 - **BM25 has no stemming** (by design, see the design notes). Published
   BM25 (Anserini, with stemming) scores 0.665 / 0.325 / 0.236 nDCG@10 on these
   datasets; notelight's 0.678 / 0.305 / 0.238 is in the same range.
+
+### Phrase matching
+
+`hybrid` includes the phrase rules (see the design notes, "Phrase search
+decisions"): chunks containing every quoted phrase rank first, and a chunk
+with all query terms in order gains `phrase_boost / 61`. The weight was
+swept with `notelight eval --methods hybrid --phrase-boost <w>`:
+
+| `phrase_boost` | SciFact nDCG@10 | NFCorpus nDCG@10 | FiQA nDCG@10 |
+|---|---:|---:|---:|
+| none (before phrase matching) | 0.710 | 0.350 | 0.349 |
+| 0 (quoted phrases only) | 0.710 | 0.350 | 0.352 |
+| 0.5 | 0.712 | 0.350 | 0.351 |
+| **1 (default)** | 0.712 | 0.350 | 0.351 |
+| 2 | 0.712 | 0.349 | 0.351 |
+| 4 | 0.712 | 0.349 | 0.351 |
+
+BEIR queries are long questions whose terms rarely appear in order, so the
+bonus barely moves them (at most 0.002). It is meant for short, phrase-like
+queries over notes, which BEIR does not measure; the bar here is that it
+does no harm. Among the evaluated (test) queries only FiQA has quotes: 33 of
+648, such as `Why is “cheque cashing” a legitimate business?`. They account
+for FiQA's +0.003 at weight 0.
 
 ## Latency
 
@@ -73,7 +96,7 @@ includes a few microseconds of binding overhead), excluding query embedding.
 | `binary+int8` | 0.07 | 0.06 | 0.52 |
 | `ternary+int8` (default) | 0.10 | 0.08 | 0.85 |
 | `bm25` | 0.05 | 0.01 | 0.27 |
-| `hybrid` | 0.16 | 0.10 | 1.16 |
+| `hybrid` | 0.19 | 0.13 | 1.33 |
 
 Embedding the query with bge-small takes about 5 ms on this CPU, more than
 any search here, so for a personal folder the search is never the

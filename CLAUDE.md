@@ -83,7 +83,8 @@ C++, x64/x86 build tools, Windows SDK).
 | 2 | Python package: bindings, embedder, incremental indexer, CLI | done |
 | 3 | Eval: BEIR (SciFact, NFCorpus, FiQA) recall@10/nDCG@10 for f32, int8, binary, binary+rescore, ternary+rescore, BM25, hybrid; Rust vs NumPy baseline | done |
 | 4 | MCP server (official Python SDK, stdio): search, read_context, list_sources, index_status; demo GIF | done |
-| 5 | Localhost web UI (FastAPI + one page), PDF/DOCX extras, wheels via maturin-action, PyPI | **next** |
+| 5a | Wheels via maturin-action (smoke-tested per OS), sdist, CHANGELOG, PyPI 0.1.0 | release prep done; tag + publish pending the owner |
+| 5b | Localhost web UI (FastAPI + one page), PDF/DOCX extras (0.2) | **next** |
 | v2 | Same core compiled to wasm32 + TypeScript browser app | |
 
 ## Milestone 2 notes (for whoever picks up M3)
@@ -127,3 +128,19 @@ C++, x64/x86 build tools, Windows SDK).
 - The README demo GIF (`docs/assets/mcp-demo.gif`) is rendered by
   `scripts/make_demo_gif.py` from a real stdio session over `docs/` (needs
   Pillow and the cached bge-small). Re-run it when search results change.
+
+## Releasing (milestone 5a)
+
+- The version lives only in `Cargo.toml` (`workspace.package.version`);
+  maturin copies it into the Python metadata, and `notelight.__version__`
+  reads it from the extension. Bump it there, add a `CHANGELOG.md` section,
+  then tag `vX.Y.Z`.
+- `.github/workflows/wheels.yml` builds abi3 wheels (Linux x86_64/aarch64,
+  Windows x64, macOS arm64/x86_64) and an sdist, installs every wheel into a
+  clean venv without Rust on Python 3.10 and 3.14 (3.13 on Intel macOS, where
+  onnxruntime stops) and runs `notelight index/search --embedder hashing`,
+  and builds the sdist from source. On a `v*` tag it checks the tag matches
+  the version and publishes via PyPI trusted publishing (environment `pypi`).
+  It also runs on `workflow_dispatch` and on PRs touching packaging files.
+- The README is the PyPI long description, so its links must be absolute
+  GitHub URLs (in-page `#anchors` are fine). `twine check` the dist files.

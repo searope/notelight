@@ -13,12 +13,23 @@ authors = [{ name = "Sergey Nefedyev" }]
 keywords = ["search", "semantic-search", "rag", "mcp", "embeddings", "bm25"]
 classifiers = [
   "Development Status :: 3 - Alpha",
+  "Environment :: Console",
   "Intended Audience :: Developers",
+  "Intended Audience :: End Users/Desktop",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Programming Language :: Rust",
-  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Text Processing :: Indexing",
+  "Typing :: Typed",
 ]
 dynamic = ["version"]
 dependencies = [
@@ -39,14 +50,20 @@ dev = ["maturin>=1.8,<2", "pytest>=8", "anyio>=4", "ruff>=0.6", "mypy>=1.11"]
 notelight = "notelight.cli:app"
 
 [project.urls]
+Homepage = "https://github.com/searope/notelight"
+Documentation = "https://github.com/searope/notelight#readme"
 Repository = "https://github.com/searope/notelight"
 Issues = "https://github.com/searope/notelight/issues"
+Changelog = "https://github.com/searope/notelight/blob/main/CHANGELOG.md"
 
 [tool.maturin]
 manifest-path = "crates/notelight-py/Cargo.toml"
 python-source = "python"
 module-name = "notelight._core"
 features = ["pyo3/extension-module"]
+# The version comes from Cargo (workspace.package.version), so there is one
+# place to bump it.
+include = [{ path = "CHANGELOG.md", format = "sdist" }]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

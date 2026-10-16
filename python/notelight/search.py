@@ -5,7 +5,9 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import sqlite3
+from collections.abc import Set as AbstractSet
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -30,7 +32,9 @@ __all__ = [
     "indexed_files",
     "indexed_folders",
     "list_indexes",
+    "match_spans",
     "page_starts",
+    "query_terms",
     "skipped_files",
     "snippet",
 ]
@@ -83,10 +87,53 @@ def format_pages(first: int | None, last: int | None) -> str | None:
     return f"p. {first}" if first == last else f"pp. {first}-{last}"
 
 
-def snippet(text: str, width: int = 240) -> str:
-    """The first `width` characters of `text` on one line."""
+#: A run of letters and digits: the unit `match_spans` highlights.
+_WORD = re.compile(r"[^\W_]+")
+
+
+def query_terms(query: str) -> frozenset[str]:
+    """The BM25 terms of `query`: what search matched, and what to highlight."""
+    return frozenset(_core.tokenize(query))
+
+
+def match_spans(text: str, terms: AbstractSet[str]) -> list[tuple[int, int]]:
+    """`(start, end)` spans of the words in `text` that match one of `terms`.
+
+    Words are compared as BM25 terms, as search compares them, so case does
+    not matter and `getUserName` matches the query "user".
+    """
+    if not terms:
+        return []
+    return [
+        m.span() for m in _WORD.finditer(text) if not terms.isdisjoint(_core.tokenize(m.group()))
+    ]
+
+
+def snippet(text: str, width: int = 240, terms: AbstractSet[str] = frozenset()) -> str:
+    """At most `width` characters of `text`, on one line.
+
+    Normally the start of the text. Given query `terms` (see `query_terms`)
+    and no match near the start, the window starts a little before the first
+    matching word instead, so the match is visible; `…` marks cut ends.
+    """
     flat = " ".join(text.split())
-    return flat if len(flat) <= width else flat[: width - 1].rstrip() + "…"
+    if len(flat) <= width:
+        return flat
+    spans = match_spans(flat, terms)
+    if not spans or spans[0][1] <= width - 1:
+        return flat[: width - 1].rstrip() + "…"
+    # Show some lead-in, keep the window full near the end, start on a word.
+    first = spans[0][0]
+    start = max(0, min(first - width // 4, len(flat) - (width - 1)))
+    space = flat.find(" ", start, first)
+    if space != -1:
+        start = space + 1
+    if start == 0:  # a single huge word: nothing better to show than the start
+        return flat[: width - 1].rstrip() + "…"
+    body = flat[start : start + width - 2]
+    if start + width - 2 >= len(flat):
+        return "…" + body
+    return "…" + body.rstrip() + "…"
 
 
 class Searcher:

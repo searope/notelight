@@ -73,7 +73,7 @@ re-run takes about as long as starting the CLI (0.5 s for the folder above).
 | Command | What it does |
 |---|---|
 | `notelight index <folder>` | create or update the index for a folder |
-| `notelight search "<query>" [-k 10] [--json] [-f <folder>]` | hybrid search; `--json` returns path, line range, heading path and text for scripts and agents; quote exact phrases: `'"lock file" windows'` |
+| `notelight search "<query>" [-k 10] [--json] [-f <folder>]` | hybrid search; quote exact phrases: `'"lock file" windows'`; on a terminal the matched words are highlighted and each snippet starts near the first match (`NO_COLOR` turns colour off); `--json` returns path, line range, heading path and text for scripts and agents |
 | `notelight status [<folder>] [--json]` | list indexed folders, sizes, embedders and generations |
 | `notelight mcp [-f <folder>]...` | run the MCP server over stdio for AI agents ([below](#use-with-claude--cursor)) |
 | `notelight serve [-f <folder>]... [--port 8765] [--open]` | search in your browser on localhost; needs `pip install "notelight[web]"` ([below](#web-ui)) |

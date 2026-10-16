@@ -20,6 +20,10 @@ def quantize_binary(vectors: npt.NDArray[np.float32]) -> npt.NDArray[np.uint8]:
 def hamming(a: npt.NDArray[np.uint8], b: npt.NDArray[np.uint8]) -> int:
     """Hamming distance between two packed binary codes of equal length."""
 
+def tokenize(text: str) -> list[str]:
+    """The BM25 terms of text: lowercase, split on non-alphanumerics and at camelCase
+    boundaries (plus the whole identifier), stopwords and single letters dropped."""
+
 def chunk_text(text: str, max_chars: int = 1200, markdown: bool = True) -> list[Chunk]:
     """Split text into chunks of at most max_chars characters.
 

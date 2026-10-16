@@ -13,9 +13,10 @@ retrieval quality you can measure.
 
 > **Status: 0.1.0, alpha.** You can index a folder of notes, search it
 > from the command line or [from Claude, Cursor and other AI agents over
-> MCP](#use-with-claude--cursor), and measure retrieval quality on public
-> benchmarks ([results](#retrieval-quality)). A localhost web UI and PDF/DOCX
-> support are next (0.2). See the [roadmap](#roadmap) and the
+> MCP](#use-with-claude--cursor) or [in your browser](#web-ui), include
+> [PDF and DOCX files](#pdf-and-docx), and measure retrieval quality on
+> public benchmarks ([results](#retrieval-quality)). See the
+> [roadmap](#roadmap) and the
 > [changelog](https://github.com/searope/notelight/blob/main/CHANGELOG.md).
 
 ## Why

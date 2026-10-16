@@ -425,3 +425,40 @@ heading paths exactly as in a `.md` note. A body line that Markdown would read
 as a heading or a fence (`# ...`, ```` ``` ````) is escaped with a backslash.
 Table rows become `cell | cell` lines; headers, footers, comments and text
 boxes are left out.
+
+## Web UI decisions
+
+### A thin layer over the MCP service
+
+`notelight serve` (the `web` extra: FastAPI and uvicorn) puts four GET
+endpoints over the same `NotesService` that backs `notelight mcp`:
+`/api/search`, `/api/context`, `/api/sources` and `/api/status`. Searcher
+caching, rank-merging across folders, per-folder skips and the
+indexed-files check for reading are therefore shared, not reimplemented, and
+the browser can see exactly what an agent can. A `ToolError` becomes a 400
+with the same message. Like the MCP server it never takes the writer lock.
+FastAPI runs the plain `def` endpoints in a thread pool, which the service
+already allows (see "One searcher per folder").
+
+### One page, no build step
+
+The page is `index.html`, `app.js` and `style.css` in package data, served
+from three fixed routes. There is no static-directory mount, so no URL maps
+to a path on disk. There is no framework, bundler or CDN: nothing is fetched
+from the network, and the page keeps working offline. All server text is
+inserted with `textContent`, and query terms are highlighted by building
+`<mark>` nodes rather than HTML strings, so indexed content cannot inject
+markup. A strict Content-Security-Policy (`script-src 'self'`, no inline
+script) backs that up.
+
+### Localhost only, and checking `Host`
+
+uvicorn binds to 127.0.0.1, and there is no option to change that: exposing
+private notes to a network would be a different product. Binding alone does
+not stop DNS rebinding. A page on `evil.example` can re-resolve its own name
+to 127.0.0.1 and then make same-origin requests to the server. Those requests
+still carry `Host: evil.example`, so a middleware refuses any request whose
+`Host` is not `127.0.0.1`, `localhost` or `[::1]` (with an optional port).
+The API is GET-only and sends no CORS headers, so other origins cannot read
+its responses.
+

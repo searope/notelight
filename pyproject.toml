@@ -49,6 +49,8 @@ dev = ["maturin>=1.8,<2", "pytest>=8", "anyio>=4", "ruff>=0.6", "mypy>=1.11"]
 pdf = ["pypdf>=5"]
 docx = ["python-docx>=1.1"]
 documents = ["notelight[pdf,docx]"]
+# Localhost web UI (0.2): `notelight serve`.
+web = ["fastapi>=0.115", "uvicorn>=0.30"]
 
 [project.scripts]
 notelight = "notelight.cli:app"

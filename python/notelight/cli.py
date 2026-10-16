@@ -262,6 +262,50 @@ def mcp(
     serve(folders or None, offline=offline)
 
 
+@app.command("serve")
+def serve_web(
+    folders: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--folder",
+            "-f",
+            help="Serve only this indexed folder (repeat for several). Default: every indexed "
+            "folder, including ones indexed later.",
+            show_default=False,
+        ),
+    ] = None,
+    port: Annotated[int, typer.Option("--port", "-p", min=1, max=65535, help="Port.")] = 8765,
+    open_browser: Annotated[
+        bool, typer.Option("--open", help="Open the page in the default browser.")
+    ] = False,
+    offline: OfflineOpt = False,
+) -> None:
+    """Run the web UI on http://127.0.0.1:PORT (needs `pip install notelight[web]`).
+
+    It listens on localhost only and, like `notelight mcp`, never changes an index.
+    """
+    try:
+        from notelight.web import run
+    except ImportError as e:
+        if e.name not in {"fastapi", "uvicorn", "starlette"}:
+            raise
+        _fail('the web UI needs extra packages; install them with: pip install "notelight[web]"')
+
+    for folder in folders or []:
+        if describe_index(paths.index_dir_for(folder)) is None:
+            target = paths.normalize_folder(folder)
+            _fail(f"{target} is not indexed; run `notelight index {target}` first", code=2)
+
+    def ready(url: str) -> None:
+        typer.echo(f"notelight web UI on {url} (Ctrl+C to stop)", err=True)
+        if open_browser:
+            import webbrowser
+
+            webbrowser.open(url)
+
+    run(folders or None, port=port, offline=offline, on_ready=ready)
+
+
 @app.command("eval")
 def eval_(
     datasets: Annotated[

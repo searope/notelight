@@ -75,6 +75,7 @@ re-run takes about as long as starting the CLI (0.5 s for the folder above).
 | `notelight search "<query>" [-k 10] [--json] [-f <folder>]` | hybrid search; `--json` returns path, line range, heading path and text for scripts and agents |
 | `notelight status [<folder>] [--json]` | list indexed folders, sizes, embedders and generations |
 | `notelight mcp [-f <folder>]...` | run the MCP server over stdio for AI agents ([below](#use-with-claude--cursor)) |
+| `notelight serve [-f <folder>]... [--port 8765] [--open]` | search in your browser on localhost; needs `pip install "notelight[web]"` ([below](#web-ui)) |
 | `notelight eval [<dataset or folder>...] [--json]` | recall@10 and nDCG@10 of every retrieval method on BEIR datasets ([below](#retrieval-quality)) |
 | `notelight version` | versions and the data directory |
 
@@ -209,6 +210,29 @@ pip install pillow
 python scripts/make_demo_gif.py --query "what happens if I re-index while the agent is searching"
 ```
 
+## Web UI
+
+`notelight serve` opens the same search in a browser, for people rather
+than agents:
+
+```powershell
+pip install "notelight[web]"
+notelight serve --open             # http://127.0.0.1:8765, every indexed folder
+```
+
+![The web UI searching this repository's docs, with one result expanded to its surrounding lines](docs/assets/web-ui.jpg)
+
+Type to search (results update as you type), filter by folder, and click a
+result, or move with the arrow keys or `j`/`k` and press Enter, to read the
+lines around it. Each folder shows whether its index is up to date. The page
+is one HTML file with plain JavaScript, no build step and no CDN, in light
+and dark themes. It works at phone width too.
+
+The server listens on 127.0.0.1 only, never changes an index, and reads only
+files the index covers, through the same checks as the MCP server's
+`read_context`. It refuses requests whose `Host` header is not a loopback
+name, which blocks DNS-rebinding attacks from other web pages.
+
 ## Architecture
 
 ```
@@ -289,7 +313,7 @@ git clone https://github.com/searope/notelight
 cd notelight
 python -m venv .venv
 # Windows: .venv\Scripts\activate   |   macOS/Linux: source .venv/bin/activate
-pip install -e ".[dev]"        # builds the Rust extension via maturin
+pip install -e ".[dev,web]"    # builds the Rust extension via maturin; web: web UI + its tests
 pytest                         # Python tests (no network; uses a fake embedder)
 cargo test -p notelight-core   # Rust unit, integration and property tests
 cargo bench -p notelight-core  # Rust benchmarks

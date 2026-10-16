@@ -1,0 +1,7 @@
+[
+  {"query": "bread leavening culture recipe", "expected": "home/sourdough.md"},
+  {"query": "feline veterinary appointment", "expected": "home/kitten.md"},
+  {"query": "holiday itinerary Japan temples", "expected": "home/kyoto-trip.md"},
+  {"query": "container exceeded memory", "expected": "work/oom-postmortem.md"},
+  {"query": "government income levy deadlines", "expected": "work/quarterly-taxes.md"}
+]

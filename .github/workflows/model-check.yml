@@ -1,0 +1,118 @@
+name: Model check
+
+# Installs a published notelight from PyPI and runs the real bge-small ONNX
+# model, which CI and the wheel smoke tests never do (they use the hashing
+# embedder). Weekly, so a broken dependency release (onnxruntime, tokenizers,
+# numpy) or a Hub change shows up without waiting for a user report.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: notelight version to install from PyPI (empty = latest)
+        required: false
+        default: ""
+      scifact:
+        description: Also run `notelight eval scifact` on Linux
+        type: boolean
+        default: true
+  schedule:
+    - cron: "17 5 * * 1" # Mondays 05:17 UTC
+  # Changes to the check itself are tested before they merge (a workflow can
+  # only be dispatched by hand once it is on the default branch).
+  pull_request:
+    paths:
+      - .github/workflows/model-check.yml
+      - scripts/model_check.py
+      - tests/fixtures/model-check/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  model:
+    name: bge-small from PyPI on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Only the fixture and the check script; the package comes from PyPI.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            scripts/model_check.py
+            tests/fixtures/model-check
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Install notelight from PyPI into a clean venv
+        id: install
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # `runner` is not available in job-level env, so set these here.
+          echo "NOTELIGHT_HOME=$RUNNER_TEMP/notelight-home" >> "$GITHUB_ENV"
+          echo "NOTELIGHT_MODEL_CACHE=$RUNNER_TEMP/notelight-models" >> "$GITHUB_ENV"
+          python -m venv "$RUNNER_TEMP/venv"
+          if [ -d "$RUNNER_TEMP/venv/Scripts" ]; then bin="$RUNNER_TEMP/venv/Scripts"; else bin="$RUNNER_TEMP/venv/bin"; fi
+          echo "$bin" >> "$GITHUB_PATH"
+          "$bin/python" -m pip install --only-binary=:all: "notelight${VERSION:+==$VERSION}"
+          "$bin/python" -c "from notelight.embed import BGE_SMALL_EN_V15 as m; print('revision=' + m.revision)" >> "$GITHUB_OUTPUT"
+      - name: notelight version
+        run: notelight version
+      - uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/notelight-models
+          key: bge-small-${{ steps.install.outputs.revision }}
+      - name: Semantic queries find their notes (and keyword search does not)
+        run: python scripts/model_check.py
+
+  scifact:
+    name: SciFact eval from PyPI on ubuntu-latest
+    if: github.event_name != 'workflow_dispatch' || inputs.scifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Install notelight from PyPI into a clean venv
+        id: install
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # `runner` is not available in job-level env, so set these here.
+          echo "NOTELIGHT_HOME=$RUNNER_TEMP/notelight-home" >> "$GITHUB_ENV"
+          echo "NOTELIGHT_MODEL_CACHE=$RUNNER_TEMP/notelight-models" >> "$GITHUB_ENV"
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --only-binary=:all: "notelight${VERSION:+==$VERSION}"
+          "$RUNNER_TEMP/venv/bin/python" -c "from notelight.embed import BGE_SMALL_EN_V15 as m; print('revision=' + m.revision)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/notelight-models
+          key: bge-small-${{ steps.install.outputs.revision }}
+      # Corpus embeddings are not cached: embedding all 5,183 documents with
+      # the installed wheel is the point. nDCG@10 must match docs/results.md.
+      - name: notelight eval scifact
+        working-directory: ${{ runner.temp }}
+        run: |
+          notelight eval scifact --methods f32,ternary+int8,bm25,hybrid --no-baseline --json > scifact.json
+          python - <<'EOF'
+          import json
+          expected = {"f32": 0.713, "ternary+int8": 0.711, "bm25": 0.678, "hybrid": 0.712}
+          run = json.load(open("scifact.json", encoding="utf-8"))[0]
+          got = {m["method"]: m["ndcg"] for m in run["methods"]}
+          bad = {k: got.get(k) for k, v in expected.items() if abs(got.get(k, 0) - v) > 0.01}
+          print("nDCG@10:", {k: round(v, 3) for k, v in got.items()})
+          assert not bad, f"SciFact nDCG@10 differs from docs/results.md by more than 0.01: {bad}"
+          EOF

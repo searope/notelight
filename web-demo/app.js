@@ -1,35 +1,123 @@
 // The demo page: load an index generation into WebAssembly memory, then
-// search it with the Rust core. No framework and no network beyond this
-// folder: the sample index and the .wasm are served next to this file.
+// search it with the Rust core. When the index has bge-small embeddings, the
+// query is embedded here too (embed.js, onnxruntime-web) and the search is
+// hybrid. The page, the .wasm, the runtime and the sample index are served
+// from this folder; the only other request is the one-time model download,
+// which is verified by SHA-256 and kept in the browser's Cache API.
 //
 // URL parameters, for measuring other indexes without the folder picker:
 //   ?index=<url of a generation folder>  load it on start
 //   ?bench=<url of a queries file>       queries for the Benchmark button
+//   ?model=<url of a folder>             fetch the model files from there instead
+//                                        of the Hub (laid out like the Python
+//                                        model cache's revision folder)
 import init, { Index, version } from "./pkg/notelight_wasm.js";
-import { bench, formatBench } from "./bench.js";
+import { bench, benchEmbedded, formatBench } from "./bench.js";
+import {
+  BGE_SMALL_EN_V15,
+  browserCache,
+  checkIndexEmbedder,
+  modelIdOf,
+  QueryEmbedder,
+} from "./embed.js";
+
+const ORT_URL = "./vendor/onnxruntime-web/ort.wasm.min.mjs";
+const CACHE_NAME = "notelight-models";
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 let index = null;
+let embedder = null; // a QueryEmbedder once loaded, reused across indexes
+let embedderLoading = null; // the pending load, so two indexes do not load it twice
+let useVectors = false; // whether the open index takes our query vectors
 
 function setStatus(text, isError = false) {
   $("status").textContent = text;
   $("status").classList.toggle("error", isError);
 }
 
-const kib = (n) => (n / 1024 >= 1024 ? `${(n / 1048576).toFixed(1)} MiB` : `${Math.round(n / 1024)} KiB`);
+function setModelStatus(text, isError = false) {
+  $("model-status").hidden = !text;
+  $("model-status").textContent = text;
+  $("model-status").classList.toggle("error", isError);
+}
 
-/** Open an index from the four files' bytes and show what was loaded. */
-function open(files, source, readMs) {
+const kib = (n) => (n / 1024 >= 1024 ? `${(n / 1048576).toFixed(1)} MiB` : `${Math.round(n / 1024)} KiB`);
+const ms = (x) => (x >= 1000 ? `${(x / 1000).toFixed(1)} s` : `${x.toFixed(0)} ms`);
+
+/** Load bge-small once: the runtime, the verified files (cache or download), a session. */
+function loadEmbedder() {
+  embedderLoading ??= (async () => {
+    let ort;
+    try {
+      ort = await import(ORT_URL);
+    } catch {
+      throw new Error("onnxruntime-web is not in web-demo/vendor/; run: python scripts/vendor_ort.py");
+    }
+    // Threads need a cross-origin isolated page (COOP and COEP headers:
+    // `serve_demo.py --isolated`); a plain static server gets one thread.
+    ort.env.wasm.numThreads = crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency) : 1;
+    const cache = await browserCache(CACHE_NAME);
+    const onProgress = ({ file, received, total }) => {
+      if (file === BGE_SMALL_EN_V15.onnx.path) {
+        setModelStatus(`Downloading bge-small (one time): ${kib(received)} of ${kib(total)}…`);
+      }
+    };
+    setModelStatus("Loading the bge-small query embedder…");
+    const loaded = await QueryEmbedder.load(ort, { mirror: params.get("model"), cache, onProgress });
+    loaded.timings.threads = ort.env.wasm.numThreads;
+    window.embedderTimings = loaded.timings; // for measuring from DevTools
+    return loaded;
+  })();
+  return embedderLoading;
+}
+
+function describeLoad(t) {
+  const where = t.cached ? `read from the browser cache in ${ms(t.fetchMs)}` : `downloaded in ${ms(t.fetchMs)}`;
+  return (
+    `Query embedder ready: bge-small ${where}, SHA-256 verified in ${ms(t.verifyMs)}, ` +
+    `ONNX session started in ${ms(t.sessionMs)} (${ms(t.totalMs)} in all), ` +
+    `${t.threads} thread${t.threads === 1 ? "" : "s"}. Search is hybrid.`
+  );
+}
+
+/** Decide how the open index is searched, loading the embedder if the index takes it. */
+async function prepareVectors(source) {
+  useVectors = false;
+  if (!index.hasVectors) {
+    setModelStatus("This index has no embeddings: keyword search (BM25 and phrases).");
+    return;
+  }
+  try {
+    checkIndexEmbedder(index.embedder, modelIdOf(BGE_SMALL_EN_V15), source);
+  } catch (e) {
+    setModelStatus(`${e.message}. Searching by keywords only.`, true);
+    return;
+  }
+  const opened = index;
+  try {
+    embedder = await loadEmbedder();
+  } catch (e) {
+    embedderLoading = null; // let the next index retry
+    setModelStatus(`${e.message}. Searching by keywords only.`, true);
+    return;
+  }
+  if (index !== opened) return; // another index was opened meanwhile
+  useVectors = true;
+  setModelStatus(describeLoad(embedder.timings));
+  if ($("q").value) await search();
+}
+
+/** Open an index from the four files' bytes, show what was loaded, set up search. */
+async function open(files, source, readMs) {
   index?.free();
   index = null;
+  useVectors = false;
   const start = performance.now();
   index = new Index(files.manifest, files.docs, files.bm25, files.vectors ?? null);
   const openMs = performance.now() - start;
   const bytes = [files.docs, files.bm25, files.vectors].reduce((n, b) => n + (b?.length ?? 0), 0);
-  const semantic = index.hasVectors
-    ? ` It has ${index.dim}-d embeddings from ${index.embedder}; this spike cannot embed queries in the browser, so it ranks by BM25 and phrases only.`
-    : "";
+  const semantic = index.hasVectors ? ` ${index.dim}-d embeddings from ${index.embedder}.` : "";
   setStatus(
     `${source}: ${index.length.toLocaleString()} chunks, ${kib(bytes)}, read in ${readMs.toFixed(0)} ms, ` +
       `opened in ${openMs.toFixed(1)} ms.${semantic}`,
@@ -38,7 +126,8 @@ function open(files, source, readMs) {
   $("results").replaceChildren();
   $("timing").textContent = "";
   $("q").focus();
-  if ($("q").value) search();
+  if ($("q").value) await search();
+  await prepareVectors(source);
 }
 
 /** Fetch a generation's files from a URL folder (the sample, or ?index=). */
@@ -57,7 +146,7 @@ async function loadFromUrl(base, label) {
     get("bm25.bin"),
     dim > 0 ? get("vectors.bin") : null,
   ]);
-  open({ manifest, docs, bm25, vectors }, label, performance.now() - start);
+  await open({ manifest, docs, bm25, vectors }, label, performance.now() - start);
 }
 
 /**
@@ -118,15 +207,20 @@ function highlighted(text, query) {
   return frag;
 }
 
-function search() {
+async function search() {
   const query = $("q").value.trim();
   if (!index || !query) return;
   const k = Number($("k").value);
-  const start = performance.now();
-  const hits = index.search(query, null, k);
+  const searched = index; // another index may open while the query is embedded
+  let start = performance.now();
+  const vector = useVectors ? await embedder.embedQuery(query) : null;
+  const embedMs = performance.now() - start;
+  if (index !== searched) return;
+  start = performance.now();
+  const hits = index.search(query, vector, k);
   const searchMs = performance.now() - start;
   const chunks = hits.map((h) => index.chunk(h.id));
-  const totalMs = performance.now() - start;
+  const readMs = performance.now() - start - searchMs;
 
   const items = hits.map((hit, i) => {
     const c = chunks[i];
@@ -136,12 +230,14 @@ function search() {
     li.querySelector(".headings").textContent = c.headingPath.join(" › ");
     li.querySelector(".text").append(highlighted(c.text, query));
     li.querySelector(".score").textContent =
-      `score ${hit.score.toFixed(4)} · BM25 rank ${hit.bm25Rank ?? "–"}`;
+      `score ${hit.score.toFixed(4)} · BM25 rank ${hit.bm25Rank ?? "–"}` +
+      (vector ? ` · vector rank ${hit.vectorRank ?? "–"}` : "");
     return li;
   });
   $("results").replaceChildren(...items);
+  const how = vector ? `embed ${embedMs.toFixed(1)} ms, hybrid search` : "keyword search";
   $("timing").textContent = hits.length
-    ? `${hits.length} results: search ${searchMs.toFixed(2)} ms, ${(totalMs - searchMs).toFixed(2)} ms to read the chunks`
+    ? `${hits.length} results: ${how} ${searchMs.toFixed(2)} ms, ${readMs.toFixed(2)} ms to read the chunks`
     : "No results.";
 }
 
@@ -157,8 +253,10 @@ async function runBench() {
     await new Promise((r) => setTimeout(r, 30));
     const reps = Number(params.get("reps") ?? 20);
     const rows = bench(index, queries, reps);
+    if (useVectors) rows.push(...(await benchEmbedded(index, embedder, queries)));
     const head = `wasm in ${navigator.userAgent.match(/(Firefox|Edg|Chrome|Safari)\/[\d.]+/)?.[0] ?? "this browser"}: ` +
-      `${index.length} chunks, ${queries.length} queries, k=10, ${reps} reps`;
+      `${index.length} chunks, ${queries.length} queries, k=10, ${reps} reps` +
+      (useVectors ? `; embedder on ${embedder.timings.threads} thread(s), 5 reps` : "");
     $("bench-out").textContent = `${head}\n${formatBench(rows)}`;
     window.benchResult = { head, rows };
   } catch (e) {
@@ -192,7 +290,7 @@ async function main() {
       setStatus("Reading files…");
       const start = performance.now();
       const { dir, files } = await generationFiles(ev.target.files);
-      open(files, dir, performance.now() - start);
+      await open(files, dir, performance.now() - start);
     }),
   );
   $("search").addEventListener("submit", (ev) => {
@@ -200,6 +298,17 @@ async function main() {
     guard(search)();
   });
   $("bench").addEventListener("click", runBench);
+  $("forget-model").addEventListener(
+    "click",
+    guard(async () => {
+      const removed = globalThis.caches ? await caches.delete(CACHE_NAME) : false;
+      setModelStatus(
+        removed
+          ? "Deleted the cached model; the next page load downloads it again."
+          : "No model is cached in this browser.",
+      );
+    }),
+  );
 
   const preset = params.get("index");
   if (preset) await guard(() => loadFromUrl(preset, preset))();

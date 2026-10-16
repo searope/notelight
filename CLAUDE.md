@@ -36,8 +36,11 @@ python/notelight/        Python package: embed.py, ingest.py, documents.py (PDF/
                          download.py, eval/ (datasets, metrics, NumPy baseline, runner, report)
                          web/ (`notelight serve`: FastAPI over NotesService + static/ page)
 scripts/                 make_demo_gif.py (README demo GIF from a real MCP session),
-                         build_wasm.py (-> web-demo/pkg), make_sample_index.py, wasi_run.mjs
-web-demo/                static browser demo of the wasm build + committed sample index
+                         build_wasm.py (-> web-demo/pkg), vendor_ort.py (-> web-demo/vendor),
+                         serve_demo.py, make_sample_index.py (+ parity fixture),
+                         make_tokenizer_fixture.py, wasi_run.mjs
+web-demo/                static browser demo: wasm build, embed.js + tokenizer.js (bge-small
+                         queries via onnxruntime-web), committed sample index, tests/ (node --test)
 tests/                   pytest
 docs/                    design-notes.md, index-format.md (spec), results.md (BEIR numbers), learning/
 ```
@@ -60,6 +63,9 @@ cargo install wasm-bindgen-cli --version 0.2.129 --locked   # must equal Cargo.l
 cargo test --target wasm32-unknown-unknown -p notelight-wasm --test node   # JS API under Node
 cargo test --target wasm32-wasip1 -p notelight-core --lib                  # core unit tests as wasm32
 python scripts/build_wasm.py                                              # web-demo/pkg + size report
+python scripts/vendor_ort.py                                              # onnxruntime-web -> web-demo/vendor
+node --test "web-demo/tests/*.test.mjs"                                   # browser embedder parity (Node)
+python scripts/serve_demo.py [--isolated]                                 # demo on 127.0.0.1:8000
 ```
 
 The `_core` extension needs the MSVC C++ build tools (Desktop development with
@@ -96,7 +102,7 @@ C++, x64/x86 build tools, Windows SDK).
 | 4 | MCP server (official Python SDK, stdio): search, read_context, list_sources, index_status; demo GIF | done |
 | 5a | Wheels via maturin-action (smoke-tested per OS), sdist, CHANGELOG, PyPI 0.1.0 | done; **0.1.0 and 0.1.1 published to PyPI 2026-10-16** (tags `v0.1.0`, `v0.1.1`; version lives in Cargo.toml `[workspace.package]`; trusted publishing via the `pypi` environment, which needs the owner's approval per release) |
 | 5b | Localhost web UI, PDF/DOCX extras, phrase ranking, CLI highlighting | done (PRs #5-#8); ships in 0.1.0 |
-| v2 | Same core compiled to wasm32 + TypeScript browser app | spike done: core runs in the browser at native speed (`web-demo/`); app not started |
+| v2 | Same core compiled to wasm32 + TypeScript browser app | spike done: core runs in the browser at native speed (`web-demo/`); query embeddings in the browser done (hybrid search, parity with Python); app not started |
 
 ## Milestone 2 notes (for whoever picks up M3)
 
@@ -155,6 +161,15 @@ C++, x64/x86 build tools, Windows SDK).
   Rebuild it with `scripts/make_sample_index.py` after a schema change.
 - The wasm-bindgen crate and CLI versions must match exactly; bump both together
   (CI installs the CLI version from `Cargo.lock`).
+- Query embeddings: `web-demo/embed.js` mirrors `embed.py` (spec, SHA-256 on
+  every load, prefix, CLS, L2, `modelId`); change both together, then re-run
+  `scripts/make_sample_index.py` (rebuilds the sample with bge-small and the
+  parity fixture). `tokenizer.js` must stay token-identical to HF
+  `tokenizers`: run `scripts/make_tokenizer_fixture.py --sweep` after any
+  change to it. onnxruntime-web is pinned in `scripts/vendor_ort.py` (tarball
+  SHA-512 + per-file SHA-256); bumping it means new hashes and new
+  measurements. Decisions and numbers: design notes, "v2: query embeddings in
+  the browser".
 
 ## Releasing (milestone 5a)
 

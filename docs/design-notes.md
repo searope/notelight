@@ -628,11 +628,8 @@ once per page load.
 
 ### What the browser app needs next
 
-- **Query embeddings in the browser.** bge-small through onnxruntime-web
-  (WASM or WebGPU backend) or transformers.js, with the same pinned revision
-  and SHA-256 checks as `embed.py`, and a test that its vectors match the
-  Python embedder's within int8 quantization error. `model_id` must match, or
-  the index refuses the query as it does today.
+- **Query embeddings in the browser.** Done: see "v2: query embeddings in
+  the browser" below.
 - **Indexing in the browser.** `chunk_text`, `IndexWriter::build` and the
   embedder are enough to build a generation from files the user picks
   (File System Access API where available, `<input webkitdirectory>`
@@ -650,3 +647,160 @@ once per page load.
 - **The TypeScript app itself**, with the types `wasm-bindgen` generates
   (`notelight_wasm.d.ts`), and a deploy (GitHub Pages) built in CI by
   `scripts/build_wasm.py`.
+
+## v2: query embeddings in the browser
+
+The demo now embeds the query in the page with bge-small and runs the same
+hybrid search as the CLI (BM25 + vectors, RRF, phrase ranking) against an
+index the Python CLI built with its default embedder. After the model's
+one-time download nothing leaves the page. The pieces are
+`web-demo/tokenizer.js` (a WordPiece port), `web-demo/embed.js` (the model
+contract), onnxruntime-web vendored by `scripts/vendor_ort.py`, and Node tests
+in `web-demo/tests/` that run in the `wasm` CI job.
+
+### onnxruntime-web, not transformers.js
+
+Both run the same ONNX file on the same engine: transformers.js 4.3.1 depends
+on onnxruntime-web (a 1.31 dev build) and adds its own JavaScript, so it
+cannot be smaller. What decided it:
+
+| | onnxruntime-web 1.30.0 | transformers.js 4.3.1 |
+|---|---|---|
+| Licence | MIT | Apache-2.0 (plus onnxruntime-web, MIT) |
+| What the page loads | 50 KiB module + 24 KiB glue + 13.6 MiB `.wasm` (3.5 MiB gzipped) | the same runtime (its WebGPU build, 27 MiB `.wasm`) + a 444 KiB library |
+| Pin and verify the model files | we fetch the bytes, check SHA-256, hand them to `InferenceSession.create` | it fetches by repository and revision into its own cache; no hook to check a hash before use |
+| Tokenizer | ours, tested against `tokenizers` on every code point (below) | its own JavaScript port, which would need the same test |
+| Pooling, prefix, normalization | ours, a few lines that mirror `embed.py` | configurable, but one more layer to match |
+
+So the runtime is a dependency, and everything with a parity requirement
+(fetching, verifying, tokenizing, pooling) is code in this repository that the
+tests pin down. WebGPU is not used: for a 20-token query on a 33M-parameter
+model the WASM backend is fast enough (below), and it is one fewer code path.
+
+Nothing loads from a CDN. `scripts/vendor_ort.py` downloads the npm tarball
+of one pinned release, checks it against the SHA-512 integrity npm publishes,
+and extracts the three files the WASM backend needs, each checked against a
+pinned SHA-256, into `web-demo/vendor/`. That folder is git-ignored like
+`pkg/`, since the `.wasm` is 14 MB; the licence is committed in
+`web-demo/THIRD-PARTY-NOTICES.md`.
+
+### The same model contract as `embed.py`
+
+- The spec in `embed.js` copies `BGE_SMALL_EN_V15`: repository, revision
+  `5c38ec7c405e...`, and each file's size and SHA-256. `modelId` is built the
+  same way, so it is `BAAI/bge-small-en-v1.5@5c38ec7c405e`, the id the index
+  manifest records; a test checks it against the fixture Python wrote.
+- `onnx/model.onnx` and `tokenizer.json` are checked (size, then SHA-256 with
+  Web Crypto) before either is used, on every load and not only after a
+  download: a Cache API entry is as untrusted as any other bytes. A cached
+  copy that fails is deleted and downloaded again; a download that fails is
+  never cached. Verifying 127 MiB costs about 300 ms, almost half of a cached load,
+  and is worth it.
+- The query gets the bge prefix and runs through the model, and the CLS
+  vector is L2-normalized, as `OnnxEmbedder.embed_query` does.
+- An index whose manifest names another embedder is refused with the message
+  `Searcher` gives ("the index for X was built with hashing-256, but the
+  query embedder is ..."), and the page falls back to keyword search. A
+  keyword-only index never loads the model.
+
+### The tokenizer is a port, checked exhaustively
+
+bge-small's `tokenizer.json` is plain BERT: `BertNormalizer` (drop control
+characters, map whitespace, space out CJK ideographs, strip accents,
+lowercase), `BertPreTokenizer`, `WordPiece`, `[CLS] ... [SEP]`, and five
+special tokens matched in the raw text. That is under 250 lines of JavaScript. The
+constructor refuses a `tokenizer.json` that uses anything else, rather than
+tokenizing it differently.
+
+"Close enough" is not the bar: one different token id changes the vector.
+`scripts/make_tokenizer_fixture.py --sweep` tokenizes every Unicode code
+point in context, plus every line and paragraph of this repository's
+Markdown, with both libraries: 1,112,064 code points and about 3,800 lines
+and paragraphs, all identical. Getting there found three things that reading
+the Rust source would not have:
+
+- `tokenizers` treats unassigned code points as ordinary characters, not as
+  control characters (JavaScript's `\p{C}` includes them).
+- Its Unicode category tables are older than V8's. 654 code points assigned
+  since then are plain characters to it, and four changed category (U+166D
+  and U+111C9 are still punctuation to it, U+1734 and U+1171E still accents).
+  `tokenizer.js` lists them. A newer browser could add characters to the
+  first list, which only matters for scripts added to Unicode recently.
+- Lowercasing is per code point, so there is no final-sigma rule.
+
+The committed fixture (`web-demo/tests/fixtures/tokenizer-cases.json`, 34
+cases) keeps the interesting cases in CI; the sweep stays a script because
+its input is 1.1 million texts.
+
+### Parity with the Python embedder
+
+`scripts/make_sample_index.py` now builds the sample with bge-small
+(`vectors.bin` adds 90 KiB; the sample is 398 KiB for 191 chunks) and, in the
+same run, embeds 14 queries with
+`OnnxEmbedder` and records each vector and its hybrid top 10 on that index in
+`web-demo/tests/fixtures/queries.json` (31 KiB). `embed.test.mjs` embeds the
+same queries through the browser path under Node and requires cosine
+≥ 0.999 and identical top-10 ids. The measured worst case is
+1 − cosine = 2·10⁻¹³, and all 14 top-10 lists are identical: the tokens are
+the same, and ONNX Runtime's WASM kernels reproduce the native floats to
+rounding. The vectors are compared before quantization, so int8 does not
+hide differences.
+
+In CI the test downloads the model into the cache the model-check workflow
+also uses, and a missing model, runtime or wasm package fails the job
+instead of skipping it. Locally it uses the CLI's model cache and skips
+without the model, like `pytest`.
+
+### Measured
+
+On an i9-10900K (Windows 11) in Chromium 152 (the browser pane of the Claude
+desktop app; `Chrome/152.0.7977.149`), with the sample index and the 20
+queries in `web-demo/bench-queries.json` (13 to 21 tokens with the prefix).
+Query latency is the median / p95 over queries of the mean of 5 runs, best of
+three runs. A first load was measured once per setting (each origin has its
+own Cache API); cached loads give the range of two page loads.
+
+| Load | 1 thread | 4 threads (`--isolated`) |
+|---|---|---|
+| First (empty cache): download from huggingface.co | 2.8 s | 2.5 s |
+| First: SHA-256 of both files | 301 ms | 300 ms |
+| First: ONNX session | 456 ms | 444 ms |
+| First, in all (includes writing the cache) | 3.9 s | 3.6 s |
+| Cached: read from the Cache API | 65 to 70 ms | 69 to 85 ms |
+| Cached: SHA-256 | 287 to 301 ms | 295 to 297 ms |
+| Cached: ONNX session | 268 to 443 ms | 300 to 477 ms |
+| Cached, in all | 0.64 to 0.83 s | 0.70 to 0.86 s |
+
+The download time reflects this machine's connection (about 45 MiB/s); the
+file is 127 MiB. A cached load made no request outside 127.0.0.1.
+
+| Warm query (median / p95) | embed | embed + hybrid search |
+|---|---|---|
+| Chromium 152, 1 thread | 29.0 / 32.9 ms | 29.1 / 33.1 ms |
+| Chromium 152, 4 threads | 10.3 / 11.8 ms | 10.5 / 12.0 ms |
+| Node 25, 1 thread | 29.5 / 34.3 ms | 29.6 / 34.6 ms |
+| Python onnxruntime 1.31, 1 thread (native) | 10.5 / 12.4 ms | |
+| Python onnxruntime 1.31, default threads (native) | 5.0 / 5.3 ms | |
+
+Embedding is the whole cost: the search adds about 0.2 ms on this index.
+Single-threaded WebAssembly is 2.8x slower than native ONNX Runtime on one
+thread (WebAssembly SIMD is 128 bits wide; native ONNX Runtime picks wider
+x86 kernels), and four threads bring it to native single-thread speed.
+Threads need a cross-origin isolated page (COOP and COEP headers), which
+`scripts/serve_demo.py --isolated` sends and GitHub Pages cannot set; the
+page uses 4 threads when it is isolated and one otherwise.
+
+| What the page loads | Raw | gzipped |
+|---|---|---|
+| onnxruntime-web (module, glue, `.wasm`) | 13.7 MiB | 3.5 MiB |
+| notelight-wasm (`.wasm` + glue) | 262 KiB | 106 KiB |
+| The demo's own HTML, CSS and JavaScript | 40 KiB | 16 KiB |
+| bge-small (`model.onnx` + `tokenizer.json`), once, then cached | 127.6 MiB | |
+
+### Serving the demo
+
+`python -m http.server` takes MIME types from the OS, and on Windows the
+registry often maps `.mjs` to `text/plain`, which browsers refuse to run as a
+module; onnxruntime-web ships as `.mjs`. `scripts/serve_demo.py` sets the
+types explicitly and can send the isolation headers. Like the CLI's web UI, it
+binds to 127.0.0.1 only.

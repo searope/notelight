@@ -252,8 +252,9 @@ name, which blocks DNS-rebinding attacks from other web pages.
 ```
 
 The core crate has **no Python, ML or async dependencies**. That keeps it small,
-easy to test, and portable to WebAssembly. Embeddings run in Python, where the
-ML tooling is.
+easy to test, and portable to WebAssembly. Embeddings run outside it: in
+Python with ONNX Runtime, and in the browser demo with onnxruntime-web, which
+gives the same vectors.
 
 ## Performance (Rust core)
 
@@ -337,7 +338,7 @@ After changing Rust code, rebuild with `maturin develop --release`.
 | 4 | MCP server for AI agents | ✅ |
 | 5 | Web UI, PDF/DOCX, phrase ranking; tested wheels for 5 platforms | ✅ |
 | | First PyPI release ([0.1.0](https://pypi.org/project/notelight/0.1.0/)) | ✅ |
-| v2 | Same core compiled to WebAssembly, in-browser app | 🚧 [spike](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-spike-the-core-in-the-browser): search runs in the browser at native speed |
+| v2 | Same core compiled to WebAssembly, in-browser app | 🚧 [spike](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-spike-the-core-in-the-browser): search runs in the browser at native speed; [queries are embedded in the page](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-query-embeddings-in-the-browser) with the same vectors and top 10 as Python, about 10 ms per query on 4 threads (29 ms on 1) |
 
 ## Documentation
 

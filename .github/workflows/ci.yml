@@ -53,7 +53,7 @@ jobs:
       - run: cargo check --workspace --all-targets
 
   wasm:
-    name: WebAssembly (core + notelight-wasm under Node)
+    name: WebAssembly (core, notelight-wasm and the browser embedder under Node)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -83,6 +83,26 @@ jobs:
         run: cargo test -p notelight-wasm --test node --target wasm32-unknown-unknown
       - name: Build the demo package and report its size
         run: python3 scripts/build_wasm.py
+      # The browser embedder: tokenizer parity with HF tokenizers, the
+      # SHA-256 checks, and query vectors and top-10 hits against the Python
+      # embedder's (web-demo/tests). The runtime is vendored from npm and the
+      # model downloaded from the Hub, both verified; the model cache shares
+      # its key and path with the model-check workflow.
+      - uses: actions/cache@v6
+        with:
+          path: web-demo/vendor
+          key: onnxruntime-web-${{ hashFiles('scripts/vendor_ort.py') }}
+      - name: Vendor onnxruntime-web (pinned, verified)
+        run: python3 scripts/vendor_ort.py
+      - uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/notelight-models
+          key: bge-small-5c38ec7c405ec4b44b94cc5a9bb96e735b38267a
+      - name: Browser embedder under Node (parity with Python)
+        env:
+          NOTELIGHT_MODEL_CACHE: ${{ runner.temp }}/notelight-models
+          NOTELIGHT_MODEL_DOWNLOAD: "1"
+        run: node --test "web-demo/tests/*.test.mjs"
 
   rust-windows:
     name: Rust tests on Windows (mmap + generation swap)

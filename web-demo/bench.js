@@ -47,6 +47,35 @@ export function bench(index, queries, reps = 20) {
   return rows;
 }
 
+/**
+ * Warm query latency with the browser embedder: embedding alone, and
+ * embedding plus hybrid search, which is what one query costs the page.
+ * Each query is embedded `reps` times after one untimed pass; milliseconds
+ * per call are long enough to time singly. Returns rows in microseconds.
+ */
+export async function benchEmbedded(index, embedder, queries, reps = 5) {
+  const embed = [];
+  const total = [];
+  for (const q of queries) await embedder.embedQuery(q.text);
+  for (const q of queries) {
+    let embedSum = 0;
+    let totalSum = 0;
+    for (let i = 0; i < reps; i++) {
+      const start = performance.now();
+      const vector = await embedder.embedQuery(q.text);
+      const embedded = performance.now();
+      index.search(q.text, vector, K);
+      const done = performance.now();
+      embedSum += embedded - start;
+      totalSum += done - start;
+    }
+    embed.push((embedSum * 1000) / reps);
+    total.push((totalSum * 1000) / reps);
+  }
+  const sorted = (xs) => xs.sort((a, b) => a - b);
+  return [summary("embed query", sorted(embed)), summary("embed + hybrid search", sorted(total))];
+}
+
 /** The rows as text, aligned like the native example's output. */
 export function formatBench(rows) {
   const us = (x) => x.toFixed(1).padStart(8);

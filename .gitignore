@@ -16,3 +16,6 @@ dist/
 
 # Built by scripts/build_wasm.py
 web-demo/pkg/
+
+# Fetched by scripts/vendor_ort.py
+web-demo/vendor/

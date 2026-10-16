@@ -19,9 +19,16 @@ use notelight_wasm::Index;
 const MANIFEST: &[u8] = include_bytes!("../../../web-demo/sample-index/manifest.json");
 const DOCS: &[u8] = include_bytes!("../../../web-demo/sample-index/docs.bin");
 const BM25: &[u8] = include_bytes!("../../../web-demo/sample-index/bm25.bin");
+const VECTORS: &[u8] = include_bytes!("../../../web-demo/sample-index/vectors.bin");
 
 fn sample() -> Index {
-    Index::new(MANIFEST, DOCS.to_vec(), BM25.to_vec(), None).unwrap()
+    Index::new(
+        MANIFEST,
+        DOCS.to_vec(),
+        BM25.to_vec(),
+        Some(VECTORS.to_vec()),
+    )
+    .unwrap()
 }
 
 /// `obj[key]`, as JavaScript would read it.
@@ -38,9 +45,13 @@ fn array(v: &JsValue) -> js_sys::Array {
 fn opens_the_sample_index() {
     let idx = sample();
     assert!(idx.length() > 0);
-    assert_eq!(idx.dim(), 0);
-    assert!(!idx.has_vectors());
-    assert_eq!(idx.embedder(), None);
+    assert_eq!(idx.dim(), 384);
+    assert!(idx.has_vectors());
+    // The browser embedder (web-demo/embed.js) must report this same id.
+    assert_eq!(
+        idx.embedder().as_deref(),
+        Some("BAAI/bge-small-en-v1.5@5c38ec7c405e")
+    );
 }
 
 #[wasm_bindgen_test]
@@ -65,6 +76,19 @@ fn hybrid_search_without_a_vector_reports_null_ranks() {
     let first = hits.get(0);
     assert_eq!(get(&first, "bm25Rank").as_f64(), Some(1.0));
     assert!(get(&first, "vectorRank").is_null());
+}
+
+#[wasm_bindgen_test]
+fn hybrid_search_with_a_vector_reports_vector_ranks() {
+    let idx = sample();
+    let mut vector = vec![0.0_f32; 384];
+    vector[0] = 1.0;
+    let hits = array(&idx.search("memory mapped", Some(vector), 10).unwrap());
+    assert_eq!(hits.length(), 10);
+    assert!(
+        hits.iter()
+            .any(|h| get(&h, "vectorRank").as_f64().is_some())
+    );
 }
 
 #[wasm_bindgen_test]
@@ -94,8 +118,10 @@ fn chunk_returns_a_record_with_camel_case_fields() {
 fn errors_become_exceptions() {
     let idx = sample();
     assert!(idx.chunk(u32::MAX).is_err());
-    assert!(idx.search("x", Some(vec![1.0; 384]), 3).is_err());
+    assert!(idx.search("x", Some(vec![1.0; 383]), 3).is_err());
     let mut short = DOCS.to_vec();
     short.pop();
-    assert!(Index::new(MANIFEST, short, BM25.to_vec(), None).is_err());
+    assert!(Index::new(MANIFEST, short, BM25.to_vec(), Some(VECTORS.to_vec())).is_err());
+    // The manifest declares vectors.bin, so it cannot be left out.
+    assert!(Index::new(MANIFEST, DOCS.to_vec(), BM25.to_vec(), None).is_err());
 }

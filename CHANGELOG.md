@@ -8,6 +8,22 @@ format is detected and rebuilt by `notelight index`.
 
 ## [Unreleased]
 
+### Added
+
+- **Query embeddings in the browser demo.** `web-demo/` embeds the query with
+  bge-small through onnxruntime-web (vendored at a pinned version, no CDN) and
+  runs hybrid search against an index the CLI built with its default embedder.
+  Same model contract as the Python embedder: pinned revision, SHA-256 checks
+  on every load, CLS pooling, L2 normalization, query prefix, and the same
+  `model_id`, so an index built with another embedder is refused. The model
+  is downloaded once and kept in the browser's Cache API. A Node test in CI
+  shows the vectors match `OnnxEmbedder` (1 − cosine ≈ 2·10⁻¹³) with the same
+  top-10 hits; a WordPiece port matches Hugging Face `tokenizers` on every
+  Unicode code point. About 10 ms per query in Chromium on 4 threads, 29 ms
+  on 1.
+- `scripts/serve_demo.py` serves the demo with correct `.mjs`/`.wasm` types
+  (and, with `--isolated`, the headers WebAssembly threads need).
+
 ## [0.1.1] - 2026-10-16
 
 A bug-fix release of the Python package. The WebAssembly crate below lives in

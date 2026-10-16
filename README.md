@@ -151,9 +151,10 @@ The default vector search, ternary candidates re-scored with int8, matches
 exhaustive int8 to three decimals and is within 0.002 of exact float32
 search; binary candidates lose up to 0.01. Hybrid fusion helps where keywords
 are strong (NFCorpus) and hurts where they are weak (FiQA). Against a NumPy
-implementation of the binary searches, the Rust core returns identical top-10
-lists; its binary two-stage search is 7 to 13x faster, while NumPy's multi-threaded BLAS still wins the
-exhaustive int8 scan by 1.3 to 1.6x (it was 5x before the int8 dot product
+implementation of the same quantized searches, the Rust core returns identical
+top-10 lists; its two-stage searches are 7 to 19x faster (10 to 19x for the
+ternary default), while NumPy's multi-threaded BLAS still wins the
+exhaustive int8 scan by 1.3 to 1.7x (it was 5x before the int8 dot product
 was vectorized).
 Details and caveats are in [docs/results.md](docs/results.md).
 

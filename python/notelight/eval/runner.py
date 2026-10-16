@@ -55,7 +55,7 @@ F32 = npt.NDArray[np.float32]
 METHODS: tuple[str, ...] = ("f32", *_core.VECTOR_MODES, "bm25", "hybrid")
 
 #: Searches implemented both in Rust and in NumPy (`NumpyVectors`).
-BASELINE_SEARCHES: tuple[str, ...] = ("int8", "binary", "binary+int8")
+BASELINE_SEARCHES: tuple[str, ...] = ("int8", "binary", "binary+int8", "ternary+int8")
 
 #: `progress(stage, done, total)`, with stage "embed-docs" or "embed-queries".
 Progress = Callable[[str, int, int], None]
@@ -311,8 +311,10 @@ def evaluate(
                 hits = numpy_vectors.search_int8(vec, k)
             elif search == "binary":
                 hits = numpy_vectors.search_binary(vec, k)
-            else:
+            elif search == "binary+int8":
                 hits = numpy_vectors.search_binary_int8(vec, k, candidates)
+            else:
+                hits = numpy_vectors.search_ternary_int8(vec, k, candidates)
             return [i for i, _ in hits]
 
         for search in BASELINE_SEARCHES:

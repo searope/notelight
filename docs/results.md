@@ -47,7 +47,7 @@ What the table says:
   int8 (identical nDCG@10 to three decimals on all three datasets). Dropping
   the near-zero dimensions makes the candidate stage pick the right 200
   almost every time. Two bit planes instead of one cost about 0.3 ms more per
-  query on FiQA (0.82 ms instead of 0.48 ms). The masks are stored in the
+  query on FiQA (0.85 ms instead of 0.52 ms). The masks are stored in the
   index (schema version 2), about 11% more vector data.
 - **Hybrid is not a free win.** RRF gives each retriever equal say. Where
   BM25 is nearly as good as the embeddings (SciFact, NFCorpus), the fusion
@@ -67,13 +67,13 @@ includes a few microseconds of binding overhead), excluding query embedding.
 
 | Method | SciFact | NFCorpus | FiQA |
 |---|---:|---:|---:|
-| `f32` (NumPy) | 0.22 | 0.23 | 3.27 |
-| `int8` | 0.37 | 0.26 | 4.64 |
-| `binary` | 0.05 | 0.04 | 0.42 |
-| `binary+int8` | 0.07 | 0.06 | 0.48 |
-| `ternary+int8` (default) | 0.10 | 0.08 | 0.82 |
-| `bm25` | 0.05 | 0.02 | 0.27 |
-| `hybrid` | 0.17 | 0.10 | 1.23 |
+| `f32` (NumPy) | 0.22 | 0.20 | 3.53 |
+| `int8` | 0.37 | 0.26 | 4.83 |
+| `binary` | 0.05 | 0.04 | 0.46 |
+| `binary+int8` | 0.07 | 0.06 | 0.52 |
+| `ternary+int8` (default) | 0.10 | 0.08 | 0.85 |
+| `bm25` | 0.05 | 0.01 | 0.27 |
+| `hybrid` | 0.16 | 0.10 | 1.16 |
 
 Embedding the query with bge-small takes about 5 ms on this CPU, more than
 any search here, so for a personal folder the search is never the
@@ -86,29 +86,35 @@ opened index.
 
 ## Rust vs NumPy
 
-The same three searches, implemented in NumPy the way a NumPy user would
+The same four searches, implemented in NumPy the way a NumPy user would
 (`python/notelight/eval/baseline.py`), on the same queries:
 
 | Dataset | Search | Rust ms | NumPy ms | NumPy / Rust | Top-10 agreement |
 |---|---|---:|---:|---:|---:|
-| SciFact | `int8` | 0.41 | 0.25 | 0.6x | 1.000 |
-| SciFact | `binary` | 0.05 | 0.62 | 11.7x | 1.000 |
-| SciFact | `binary+int8` | 0.09 | 0.68 | 7.4x | 1.000 |
-| NFCorpus | `int8` | 0.27 | 0.20 | 0.7x | 1.000 |
-| NFCorpus | `binary` | 0.04 | 0.43 | 11.7x | 1.000 |
-| NFCorpus | `binary+int8` | 0.07 | 0.50 | 7.2x | 1.000 |
-| FiQA | `int8` | 4.65 | 3.45 | 0.7x | 1.000 |
-| FiQA | `binary` | 0.52 | 7.34 | 14.1x | 1.000 |
-| FiQA | `binary+int8` | 0.58 | 7.48 | 12.8x | 1.000 |
+| SciFact | `int8` | 0.41 | 0.24 | 0.6x | 1.000 |
+| SciFact | `binary` | 0.05 | 0.60 | 11.3x | 1.000 |
+| SciFact | `binary+int8` | 0.10 | 0.69 | 6.9x | 1.000 |
+| SciFact | `ternary+int8` | 0.13 | 1.39 | 10.5x | 1.000 |
+| NFCorpus | `int8` | 0.28 | 0.22 | 0.8x | 1.000 |
+| NFCorpus | `binary` | 0.04 | 0.43 | 11.6x | 1.000 |
+| NFCorpus | `binary+int8` | 0.08 | 0.51 | 6.8x | 1.000 |
+| NFCorpus | `ternary+int8` | 0.10 | 1.02 | 10.2x | 1.000 |
+| FiQA | `int8` | 4.62 | 3.59 | 0.8x | 1.000 |
+| FiQA | `binary` | 0.53 | 7.72 | 14.4x | 1.000 |
+| FiQA | `binary+int8` | 0.59 | 7.85 | 13.3x | 1.000 |
+| FiQA | `ternary+int8` | 0.95 | 17.8 | 18.8x | 1.000 |
 
 - **Agreement is 1.000 everywhere**: for every query, both implementations
   return the same top 10. That cross-checks the Rust bit packing, int8
-  rounding and tie-breaking against an independent implementation.
-- **The binary two-stage search is 7 to 13x faster in Rust.** XOR + popcount over
+  rounding, ternary masks and tie-breaking against an independent
+  implementation.
+- **The two-stage searches are 7 to 19x faster in Rust**: 7 to 13x with
+  binary candidates, 10 to 19x with ternary ones (the default), where NumPy
+  makes two more full-size temporaries for the masks. XOR + popcount over
   packed `u64` words and a histogram cut-off beat NumPy's
   `bitwise_xor` + `bitwise_count` + `argpartition`, which allocate a full-size
   temporary at every step.
-- **The exhaustive int8 scan is still 1.3 to 1.6x slower in Rust.** NumPy
+- **The exhaustive int8 scan is still 1.3 to 1.7x slower in Rust.** NumPy
   keeps the codes dequantized as float32 (4x the memory) and hands the
   product to a multi-threaded, SIMD BLAS kernel. The first version of the
   Rust `int8_dot` was a scalar loop with one `f32` accumulator, which the
@@ -122,8 +128,6 @@ The same three searches, implemented in NumPy the way a NumPy user would
 
 ## What changes next
 
-- **A NumPy baseline for `ternary+int8`.** The cross-check above covers
-  the binary searches but not the new default.
 - **AVX2 for `int8_dot` via runtime feature detection**, which would close
   the remaining gap to NumPy on exhaustive scans without giving up portable
   wheels. Done so far: 16 partial sums (4x on the default target).

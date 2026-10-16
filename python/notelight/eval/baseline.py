@@ -26,6 +26,9 @@ __all__ = ["NumpyVectors"]
 F32 = npt.NDArray[np.float32]
 Hits = list[tuple[int, float]]
 
+#: Ternary threshold, as a fraction of a vector's mean |value| (see `quant.rs`).
+_TERNARY_THRESHOLD = np.float32(0.7)
+
 _POPCOUNT_TABLE = np.array([bin(i).count("1") for i in range(256)], dtype=np.uint8)
 
 
@@ -35,6 +38,13 @@ def _popcount_rows(x: npt.NDArray[np.uint8]) -> npt.NDArray[np.int64]:
     bitwise_count: Callable[[Any], Any] | None = getattr(np, "bitwise_count", None)
     counts = bitwise_count(x) if bitwise_count is not None else _POPCOUNT_TABLE[x]
     return np.asarray(counts.sum(axis=1, dtype=np.int64))
+
+
+def _ternary_masks(m: F32) -> npt.NDArray[np.uint8]:
+    """Packed ternary masks: bit set where `|x| > 0.7 * mean(|x|)` of its row."""
+    a = np.abs(np.atleast_2d(m))
+    threshold = _TERNARY_THRESHOLD * a.mean(axis=1, dtype=np.float32, keepdims=True)
+    return np.packbits(a > threshold, axis=1, bitorder="little")
 
 
 def _l2_normalize(m: F32) -> F32:
@@ -84,6 +94,8 @@ class NumpyVectors:
         self.dim = self.f32.shape[1]
         self.bits = np.packbits(self.f32 > 0, axis=1, bitorder="little")
         self.codes, self.scales = _quantize_int8(self.f32)
+        # Like the Rust index, masks come from the int8 codes, not the floats.
+        self.masks = _ternary_masks(self.codes)
         self._ids = np.arange(len(self.f32), dtype=np.int64)
 
     def __len__(self) -> int:
@@ -113,6 +125,21 @@ class NumpyVectors:
         """Binary candidates, then int8 rescoring: the Rust default."""
         q = _l2_normalize(query)
         cands = self._smallest(self._hamming(q), max(candidates, k))
+        scores = (self.codes[cands] @ q) * self.scales[cands]
+        return _top_k_by_score(cands, scores, k)
+
+    def search_ternary_int8(self, query: F32, k: int, candidates: int = 200) -> Hits:
+        """Ternary candidates, then int8 rescoring: the Rust default.
+
+        The ternary dot is `popcount(m) - 2 * popcount(m & (sign_q ^ sign_d))`
+        with `m = mask_q & mask_d`; candidates are the smallest `dim - dot`.
+        """
+        q = _l2_normalize(query)
+        q_bits = np.packbits(q > 0, bitorder="little")
+        both = np.bitwise_and(self.masks, _ternary_masks(q))
+        differ = np.bitwise_and(both, np.bitwise_xor(self.bits, q_bits))
+        dot = _popcount_rows(both) - 2 * _popcount_rows(differ)
+        cands = self._smallest(self.dim - dot, max(candidates, k))
         scores = (self.codes[cands] @ q) * self.scales[cands]
         return _top_k_by_score(cands, scores, k)
 

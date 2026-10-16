@@ -23,6 +23,7 @@ from notelight.cli import app
 from notelight.embed import HashingEmbedder
 from notelight.errors import DatasetNotAvailableError
 from notelight.eval import (
+    BASELINE_SEARCHES,
     METHODS,
     DatasetSpec,
     NumpyVectors,
@@ -235,7 +236,7 @@ def test_numpy_binary_codes_match_rust() -> None:
     np.testing.assert_array_equal(NumpyVectors(vectors).bits, _core.quantize_binary(vectors))
 
 
-@pytest.mark.parametrize("mode", ["int8", "binary", "binary+int8"])
+@pytest.mark.parametrize("mode", ["int8", "binary", "binary+int8", "ternary+int8"])
 def test_numpy_baseline_agrees_with_rust(tmp_path: Path, mode: str) -> None:
     reader, vectors = _random_index(tmp_path)
     npv = NumpyVectors(vectors)
@@ -247,8 +248,10 @@ def test_numpy_baseline_agrees_with_rust(tmp_path: Path, mode: str) -> None:
             ours = npv.search_int8(q, 10)
         elif mode == "binary":
             ours = npv.search_binary(q, 10)
-        else:
+        elif mode == "binary+int8":
             ours = npv.search_binary_int8(q, 10, 50)
+        else:
+            ours = npv.search_ternary_int8(q, 10, 50)
         # Same ids in the same order; scores equal up to float summation order.
         assert [i for i, _ in ours] == [i for i, _ in rust]
         np.testing.assert_allclose([s for _, s in ours], [s for _, s in rust], atol=1e-5)
@@ -293,7 +296,7 @@ def test_evaluate_scores_every_method(beir_folder: Path, tmp_path: Path) -> None
     assert result.method("bm25").ndcg == 1.0
     # Exact search over a 64-dim bag of words finds the grade-2 document.
     assert result.method("f32").ndcg > 0.8
-    assert [b.search for b in result.baseline] == ["int8", "binary", "binary+int8"]
+    assert [b.search for b in result.baseline] == list(BASELINE_SEARCHES)
     assert all(b.agreement >= 0.9 for b in result.baseline)
 
     table = format_markdown([result])

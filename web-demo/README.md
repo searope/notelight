@@ -7,6 +7,9 @@ onnxruntime-web) and the search is hybrid, as in the CLI. No framework,
 bundler or CDN. Design and measurements: `docs/design-notes.md`, "v2 spike:
 the core in the browser" and "v2: query embeddings in the browser".
 
+Live: <https://searope.github.io/notelight/>, deployed from `main` by
+`.github/workflows/pages.yml` (`scripts/build_site.py` assembles the site).
+
 ## Run it (PowerShell)
 
 ```powershell

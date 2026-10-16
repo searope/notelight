@@ -9,6 +9,7 @@
 **Private semantic search over your own files, for you and your AI agents.**
 A Rust retrieval engine with a Python interface, a CLI, and an MCP server, with
 retrieval quality you can measure.
+[How it works](https://github.com/searope/notelight/blob/main/docs/how-it-works.md) walks through the design end to end in a few minutes.
 
 > **Status: 0.1.0, alpha.** You can index a folder of notes, search it
 > from the command line or [from Claude, Cursor and other AI agents over
@@ -339,6 +340,7 @@ After changing Rust code, rebuild with `maturin develop --release`.
 
 ## Documentation
 
+- [How notelight works](https://github.com/searope/notelight/blob/main/docs/how-it-works.md): the whole pipeline, from a folder of notes to a cited result, with diagrams
 - [Design notes](https://github.com/searope/notelight/blob/main/docs/design-notes.md): why it is built this way
 - [Index format](https://github.com/searope/notelight/blob/main/docs/index-format.md): the on-disk layout, byte by byte
 - [Results](https://github.com/searope/notelight/blob/main/docs/results.md): retrieval quality and latency on BEIR, with the

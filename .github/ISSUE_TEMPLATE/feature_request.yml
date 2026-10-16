@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest something notelight should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: The command, option, MCP tool or API you have in mind, if any.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+  - type: markdown
+    attributes:
+      value: |
+        notelight stays local and private: no telemetry, no hosted services, and
+        no network after the one-time model download. Ideas that need those are
+        unlikely to be accepted.

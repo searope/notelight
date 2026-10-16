@@ -155,14 +155,18 @@ Then ask, for example: *"Search my notes for how we release hotfixes and cite
 the files."* The agent calls `search`, reads around the best hits with
 `read_context`, and answers with locations like `runbooks/release.md:40-58`.
 
-<!-- Demo GIF placeholder: replace this comment with
-     ![notelight answering from notes in Claude Desktop](docs/assets/mcp-demo.gif) -->
-*Demo GIF: coming soon.* To record it on Windows: index a small, non-private
-notes folder, add the Claude Desktop config above, and record the Claude
-window with [ScreenToGif](https://www.screentogif.com/) at 10–15 fps while
-asking one question that needs two or three notes (show the expanded tool
-calls). Trim to under 20 seconds, keep the GIF under 5 MB, and save it as
-`docs/assets/mcp-demo.gif`.
+![An agent calling list_sources, search and read_context on this repository's docs](docs/assets/mcp-demo.gif)
+
+The tool calls and results in this GIF come from a real session: the
+script indexes this repository's `docs/` folder with bge-small, starts
+`notelight mcp` over stdio, calls the tools, and draws exactly what comes
+back. To regenerate it after changing search code (the model must be
+cached):
+
+```powershell
+pip install pillow
+python scripts/make_demo_gif.py --query "what happens if I re-index while the agent is searching"
+```
 
 ## Architecture
 

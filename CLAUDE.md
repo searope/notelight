@@ -33,6 +33,7 @@ crates/notelight-py/     thin PyO3 bindings -> python module notelight._core
 crates/notelight-py/src/ lib.rs, errors.rs (core Error -> Python exceptions), chunking.rs, index.rs
 python/notelight/        Python package: embed.py, ingest.py, indexer.py, search.py, paths.py, cli.py, mcp_server.py,
                          download.py, eval/ (datasets, metrics, NumPy baseline, runner, report)
+scripts/                 make_demo_gif.py (README demo GIF from a real MCP session)
 tests/                   pytest
 docs/                    design-notes.md, index-format.md (spec), results.md (BEIR numbers), learning/
 ```
@@ -81,7 +82,7 @@ C++, x64/x86 build tools, Windows SDK).
 | 1 | Rust core: chunking, BM25, quantized search, RRF, index format | done (independently reviewed; 8 findings fixed) |
 | 2 | Python package: bindings, embedder, incremental indexer, CLI | done |
 | 3 | Eval: BEIR (SciFact, NFCorpus, FiQA) recall@10/nDCG@10 for f32, int8, binary, binary+rescore, ternary+rescore, BM25, hybrid; Rust vs NumPy baseline | done |
-| 4 | MCP server (official Python SDK, stdio): search, read_context, list_sources, index_status; demo GIF | done (demo GIF still to record) |
+| 4 | MCP server (official Python SDK, stdio): search, read_context, list_sources, index_status; demo GIF | done |
 | 5 | Localhost web UI (FastAPI + one page), PDF/DOCX extras, wheels via maturin-action, PyPI | **next** |
 | v2 | Same core compiled to wasm32 + TypeScript browser app | |
 
@@ -123,5 +124,6 @@ C++, x64/x86 build tools, Windows SDK).
   (`search.indexed_files`); keep that as the single security check.
 - Tests use `mcp.Client(server)` in-process with `@pytest.mark.anyio`; one
   test runs `python -m notelight.cli mcp` over real stdio.
-- The README demo GIF (`docs/assets/mcp-demo.gif`) is a placeholder with
-  recording instructions; it still needs recording by hand.
+- The README demo GIF (`docs/assets/mcp-demo.gif`) is rendered by
+  `scripts/make_demo_gif.py` from a real stdio session over `docs/` (needs
+  Pillow and the cached bge-small). Re-run it when search results change.

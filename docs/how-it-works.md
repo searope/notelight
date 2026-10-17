@@ -215,7 +215,7 @@ flowchart TB
     TS --> H["histogram cut-off<br/>best 200 candidates"]
     H --> I8["int8 rescoring, query kept as f32<br/>top 50"]
     T --> B["BM25 over postings<br/>top 50"]
-    B --> F["Reciprocal Rank Fusion, k = 60"]
+    B --> F["Reciprocal Rank Fusion, k = 60<br/>BM25 hits weighted by term coverage"]
     I8 --> F
     NV --> F
     F --> P["phrase rules<br/>quoted phrases first,<br/>bonus for terms in order"]
@@ -239,7 +239,11 @@ the unquantized query.
 **Fusion uses ranks, not scores.** BM25 scores and cosine similarities are on
 different scales, and the right weighting differs per corpus. Reciprocal Rank
 Fusion adds `1 / (60 + rank)` from each list, needs no tuning, and rewards
-chunks both retrievers agree on.
+chunks both retrievers agree on. A BM25 hit's share is scaled by how many of
+the query's distinct terms it contains, squared: a query that shares no word
+with its answer still gets 50 keyword hits on incidental words, and at full
+weight they pushed the right vector hits out
+([numbers](results.md#fusion-weighting-keyword-hits-by-coverage)).
 
 **Phrase rules run after fusion** (`phrase.rs`). Chunks containing every
 quoted phrase in the query rank above all others, and a chunk that contains
@@ -286,21 +290,22 @@ sets with bge-small, using the same index code as `notelight search`.
 | Ternary candidates + int8 rescore (default) | 0.711 | 0.342 | 0.403 |
 | Binary candidates + int8 rescore | 0.703 | 0.341 | 0.399 |
 | BM25 alone | 0.678 | 0.305 | 0.238 |
-| Hybrid (`notelight search`) | 0.712 | 0.350 | 0.351 |
+| Hybrid (`notelight search`) | 0.719 | 0.358 | 0.376 |
 
 The default vector search matches exhaustive int8 to three decimals and is
 within 0.002 of exact float32. The float32 row matches published bge-small
 scores, which checks the embedder, metrics and dataset handling end to end.
-Hybrid fusion is not a free win: it helps on NFCorpus and costs 0.05 on FiQA,
-where BM25 is weak. It stays the default because notes, full of exact names
+Hybrid fusion is not a free win: it helps on SciFact and NFCorpus and costs
+0.027 on FiQA, where BM25 is weak (0.052 before keyword hits were weighted
+by term coverage). It stays the default because notes, full of exact names
 and identifiers, look more like the first case, but the loss is reported as
 measured. The phrase rules move nDCG@10 by at most 0.002 at any weight.
 
 A small [notes benchmark](results.md#notes-benchmark) checks that case: 82
 short queries over this repository's docs, labelled by line range. On its
 held-out half BM25 (0.667 nDCG@10) is ahead of the embeddings (0.639), and
-hybrid scores highest (0.715). The phrase bonus is worth 0.02 to 0.03 there,
-on phrase and identifier queries.
+hybrid scores highest (0.759; 0.715 with plain RRF). The phrase bonus is
+worth 0.02 to 0.03 there, on phrase and identifier queries.
 
 **Speed of the Rust core** (README, `cargo bench -p notelight-core`):
 criterion benchmarks on synthetic data, one thread, default x86-64 target
@@ -314,7 +319,7 @@ criterion benchmarks on synthetic data, one thread, default x86-64 target
 | Markdown chunking | 1 MB | 8.4 ms |
 
 On the BEIR datasets ([results.md](results.md#latency)), a hybrid query takes
-a median of 1.33 ms on FiQA's 57,638 documents, while embedding the query
+a median of 1.31 ms on FiQA's 57,638 documents, while embedding the query
 takes about 5 ms, so for a personal folder the search itself is never the
 bottleneck.
 

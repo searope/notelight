@@ -25,7 +25,7 @@ crates/notelight-core/   pure Rust engine, no Python/ML/async deps (WASM-portabl
   src/tokenize.rs        BM25 terms (Unicode, camelCase split, no stemming)
   src/bm25.rs            BM25 served from serialized bytes
   src/quant.rs, vectors.rs  binary codes (candidates) + int8 rescoring
-  src/fuse.rs            reciprocal rank fusion
+  src/fuse.rs            reciprocal rank fusion, weighted (BM25 hits by query-term coverage)
   src/index/             generations, manifest, writer (commit protocol), reader, mmap storage
   tests/                 integration (index.rs) and proptest suites (properties.rs)
   benches/search.rs      criterion benchmarks (numbers quoted in README)
@@ -136,6 +136,13 @@ C++, x64/x86 build tools, Windows SDK).
   `vectors.bin` (schema version 2), computed from the int8 codes.
 - Open follow-up from the results: a vectorized `int8_dot` (NumPy BLAS wins
   the exhaustive int8 scan 5x).
+- Hybrid fusion weighs each BM25 hit by `(matched / total query terms)^2`
+  (`SearchOpts::coverage_power`, default 2; only when a vector is given).
+  `notelight eval --coverage-power 0` reproduces plain RRF. Chosen on the
+  notes tune half, held-out run once; decision and the candidates that lost
+  are in the design notes, "Fusion decisions". Any change to fusion changes
+  top-10s: re-run `scripts/make_sample_index.py --hits-only` and
+  `scripts/make_indexing_fixture.py`.
 - The notes benchmark (`notelight eval notes`, data in
   `python/notelight/eval/notes/`) is the check for note-style queries. Tune on
   `--split tune`; run `--split heldout` once per decision, for settings chosen

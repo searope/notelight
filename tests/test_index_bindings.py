@@ -96,6 +96,18 @@ def test_phrases_reorder_hybrid_results(tmp_path: Path) -> None:
     assert r.search('"lock file"', phrase_boost=0.0)[0].id == 1
 
 
+def test_partial_keyword_hits_count_less_against_vectors(tmp_path: Path) -> None:
+    w = _core.IndexWriter(2, "test")
+    w.add(_core.ChunkRecord("a.md", [], 1, 1, "restart the service"), _vec(1, 0))
+    w.add(_core.ChunkRecord("b.md", [], 1, 1, "unrelated words"), _vec(0, 1))
+    w.commit(tmp_path)
+    r = _core.IndexReader.open(tmp_path)
+    # BM25 finds a.md on 1 of 3 terms; the vector points at b.md.
+    query, vec = "restart zebra yak", _vec(0, 1)
+    assert r.search(query, vec, k=1, depth=1, coverage_power=0.0)[0].id == 0
+    assert r.search(query, vec, k=1, depth=1)[0].id == 1
+
+
 def test_writer_is_single_use(tmp_path: Path) -> None:
     w = _core.IndexWriter(0)
     w.commit(tmp_path)

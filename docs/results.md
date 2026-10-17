@@ -13,7 +13,7 @@ this page comes from runs of that command; see [Reproducing](#reproducing).
 | Datasets | BEIR test splits: SciFact (5,183 docs, 300 queries), NFCorpus (3,633 docs, 323 queries), FiQA-2018 (57,638 docs, 648 queries) |
 | Metrics | nDCG@10 and recall@10, computed like `pytrec_eval` (linear gain) |
 | Machine | Intel Core i9-10900K (10 cores), Windows 11, Python 3.14, NumPy 2.5.4, ONNX Runtime 1.31 |
-| Search settings | the `notelight search` defaults: 200 candidates re-scored, 50 results per retriever fused with RRF (k = 60) |
+| Search settings | the `notelight search` defaults: 200 candidates re-scored, 50 results per retriever fused with RRF (k = 60), each BM25 hit weighted by the share of query terms it contains, squared ([why](#fusion-weighting-keyword-hits-by-coverage)) |
 
 Each BEIR document is indexed as one chunk: the title becomes the heading
 path and the text the chunk text, exactly as a section of a note would be.
@@ -29,7 +29,7 @@ The embedder truncates documents at 512 tokens; BM25 sees the full text.
 | `binary+int8` | 0.703 | 0.341 | 0.399 | 0.821 | 0.160 | 0.457 |
 | `ternary+int8` (default) | 0.711 | 0.342 | 0.403 | 0.840 | 0.161 | 0.463 |
 | `bm25` | 0.678 | 0.305 | 0.238 | 0.803 | 0.146 | 0.296 |
-| `hybrid` (what `notelight search` returns) | 0.712 | 0.350 | 0.351 | 0.839 | 0.165 | 0.426 |
+| `hybrid` (what `notelight search` returns) | 0.719 | 0.358 | 0.376 | 0.841 | 0.174 | 0.464 |
 
 What the table says:
 
@@ -49,14 +49,18 @@ What the table says:
   almost every time. Two bit planes instead of one cost about 0.3 ms more per
   query on FiQA (0.85 ms instead of 0.52 ms). The masks are stored in the
   index (schema version 2), about 11% more vector data.
-- **Hybrid is not a free win.** RRF gives each retriever equal say. Where
-  BM25 is nearly as good as the embeddings (SciFact, NFCorpus), the fusion
-  matches the vectors (SciFact) or beats both (NFCorpus). On FiQA, where BM25
-  is 0.17 nDCG@10 behind, it drags the fused list down (0.351 vs 0.403). Notes, with their exact
-  names, identifiers and error codes, are closer to the first case, which is
-  why hybrid stays the default, but the number is reported as it is. The
-  [notes benchmark](#notes-benchmark) measures that case: there BM25 is
-  ahead of the vectors, and hybrid scores highest.
+- **Hybrid is not a free win.** Where BM25 is nearly as good as the
+  embeddings (SciFact, NFCorpus), the fusion beats both (0.719 and 0.358,
+  against 0.711 and 0.342 for the vectors). On FiQA, where BM25 is 0.17
+  nDCG@10 behind, it still drags the fused list down (0.376 vs 0.403).
+  Weighting each BM25 hit by the query terms it contains
+  ([below](#fusion-weighting-keyword-hits-by-coverage)) halved that loss:
+  with plain RRF, which gave each retriever equal say, FiQA's hybrid was
+  0.351. Notes, with their exact names, identifiers and error codes, are
+  closer to the first case, which is why hybrid stays the default, but the
+  number is reported as it is. The [notes benchmark](#notes-benchmark)
+  measures that case: there BM25 is ahead of the vectors, and hybrid scores
+  highest.
 - **BM25 has no stemming** (by design, see the design notes). Published
   BM25 (Anserini, with stemming) scores 0.665 / 0.325 / 0.236 nDCG@10 on these
   datasets; notelight's 0.678 / 0.305 / 0.238 is in the same range.
@@ -66,7 +70,8 @@ What the table says:
 `hybrid` includes the phrase rules (see the design notes, "Phrase search
 decisions"): chunks containing every quoted phrase rank first, and a chunk
 with all query terms in order gains `phrase_boost / 61`. The weight was
-swept with `notelight eval --methods hybrid --phrase-boost <w>`:
+swept with `notelight eval --methods hybrid --phrase-boost <w>`, with the
+plain RRF of the time (before coverage weighting):
 
 | `phrase_boost` | SciFact nDCG@10 | NFCorpus nDCG@10 | FiQA nDCG@10 |
 |---|---:|---:|---:|
@@ -145,7 +150,8 @@ of the defaults on note-style queries, not as a general result.
 | `binary+int8` | 0.639 | 0.684 | 0.756 |
 | `ternary+int8` (default) | 0.639 | 0.684 | 0.756 |
 | `bm25` | 0.667 | 0.752 | 0.692 |
-| `hybrid` (what `notelight search` returns) | **0.715** | **0.794** | **0.769** |
+| `hybrid` (what `notelight search` returns) | **0.759** | **0.839** | **0.814** |
+| `hybrid` with plain RRF (before coverage weighting) | 0.715 | 0.794 | 0.769 |
 
 nDCG@10 by query style (number of queries in brackets):
 
@@ -153,33 +159,110 @@ nDCG@10 by query style (number of queries in brackets):
 |---|---:|---:|---:|---:|
 | `ternary+int8` | 0.699 | 0.753 | 0.622 | 0.257 |
 | `bm25` | 0.813 | 0.907 | 0.546 | 0.000 |
-| `hybrid` | 0.833 | 0.907 | 0.659 | 0.082 |
+| `hybrid` | 0.890 | 0.906 | 0.684 | 0.237 |
+| `hybrid`, plain RRF | 0.833 | 0.907 | 0.659 | 0.082 |
 
 The tune half, same settings, for comparison: `ternary+int8` 0.524,
-`bm25` 0.647, `hybrid` 0.663 nDCG@10.
+`bm25` 0.647, `hybrid` 0.688 (0.663 with plain RRF) nDCG@10.
 
 What the numbers say:
 
 - **Hybrid is the best default for notes.** It beats vector search alone on
-  both halves: by 0.076 nDCG@10 on held-out (95% CI 0.025 to 0.126; 24
-  queries better, 8 worse) and by 0.140 on tune. It is also ahead of BM25
-  alone on both halves (+0.047 held-out, +0.017 tune), but those intervals
-  include zero.
+  both halves: by 0.121 nDCG@10 on held-out (95% CI 0.067 to 0.184; 27
+  queries better, 7 worse) and by 0.164 on tune. It is also ahead of BM25
+  alone on both halves: by 0.092 on held-out (0.045 to 0.143; 21 better,
+  8 worse) and by 0.041 on tune, where the interval includes zero. With
+  plain RRF the lead over BM25 was within noise on both halves.
 - **Keywords carry note search.** Unlike on BEIR, BM25 alone beats the
   embeddings here. It is far ahead on identifiers and phrases (0.907 vs
   0.753), because a name like `IndexBusyError` means nothing to bge-small.
   The vectors win on questions and paraphrases.
-- **Paraphrases are the weak spot.** With no shared word, BM25 scores 0, and
-  hybrid fusion halves what the vectors alone find (0.082 vs 0.257 nDCG@10,
-  on 5 queries). bge-small finds about half of these passages in its top 10,
-  but rarely first. That is the cost of fusion's equal weighting, and with 10
-  paraphrases in all it is a direction to watch, not a measured trade-off.
+- **Paraphrases are still the weak spot, but fusion no longer hides the
+  vectors' hits.** With no shared word, BM25 scores 0. Plain RRF cut what the
+  vectors alone find by two thirds (0.082 vs 0.257 nDCG@10, on 5 queries);
+  coverage weighting keeps most of it (0.237). bge-small finds about half of
+  these passages in its top 10, but rarely first. With 10 paraphrases in all
+  this is a direction, not a measured trade-off on its own; the overall gain
+  of the weighting (next section) is measured.
 - **The quantized searches are exact here.** At 229 chunks `ternary+int8`
   and `binary+int8` return what exhaustive int8 does. `f32` is 0.008 below
   int8 on held-out and 0.007 above on tune: quantization noise in both
   directions.
 
+### Fusion: weighting keyword hits by coverage
+
+Plain RRF adds `1 / (60 + rank)` from each list, so a BM25 hit counts as much
+as a vector hit at the same rank, whatever it matched. On a paraphrase BM25
+still returns up to 50 hits, each on an incidental word (`two`, `update`,
+`output`), and their top scores (5.6 to 9.2) are in the same range as real
+keyword hits (5.0 to 15), so the score cannot tell them apart. What can is
+term coverage: on the tune half, the best BM25 hit contains 25 to 40% of a
+paraphrase's distinct terms, and at least 50% of every other query's
+(keyword mean 93%, phrase 100%, question 74%). Of the relevant chunks in the
+vector top 10, plain fusion pushed 3 of 4 out on paraphrases, against 3 of
+24 on questions, 1 of 31 on keywords and 1 of 17 on phrases.
+
+So hybrid search now weighs each BM25 hit: it adds
+`(matched / total)² / (60 + rank)`, where the chunk contains `matched` of the
+query's `total` distinct terms. A chunk with every term counts fully, one
+with 1 of 4 terms counts 1/16. Vector hits are unchanged, and keyword-only
+search (no embedder) keeps BM25's order. `--coverage-power 0` gives plain
+RRF.
+
+Seven candidates were written down after the diagnosis and before any of
+them ran, with a rule to pick one on tune (highest hybrid nDCG@10 that lowers
+no style by more than 0.02). Hybrid on the **tune** half:
+
+| Candidate | nDCG@10 | keyword | phrase | question | paraphrase | vs plain RRF (95% CI) | better / worse |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| plain RRF, k = 60 (the old default) | 0.663 | 0.728 | 0.838 | 0.652 | 0.126 | | |
+| RRF k = 20 | 0.672 | 0.731 | 0.838 | 0.680 | 0.126 | +0.009 (−0.000 to +0.021) | 5 / 1 |
+| RRF k = 100 | 0.663 | 0.728 | 0.838 | 0.652 | 0.126 | 0.000 | 0 / 0 |
+| BM25 weight 0.5 | 0.659 | 0.717 | 0.822 | 0.665 | 0.126 | −0.004 (−0.018 to +0.011) | 4 / 12 |
+| BM25 hit × coverage | 0.682 | 0.746 | 0.838 | 0.648 | 0.233 | +0.018 (+0.000 to +0.040) | 10 / 5 |
+| **BM25 hit × coverage² (picked)** | **0.688** | 0.749 | 0.838 | 0.672 | 0.220 | +0.024 (−0.005 to +0.058) | 12 / 5 |
+| BM25 hit only if coverage ≥ 0.5 | 0.681 | 0.720 | 0.845 | 0.679 | 0.215 | +0.018 (−0.018 to +0.056) | 8 / 4 |
+| no BM25 if its best hit has coverage < 0.5 | 0.674 | 0.728 | 0.838 | 0.652 | 0.215 | +0.011 (−0.016 to +0.042) | 3 / 1 |
+
+The held-out half was then run once, for the pick and plain RRF:
+
+| Hybrid on **held-out** | nDCG@10 | R@10 | MRR@10 | difference (95% CI) | queries better / worse |
+|---|---:|---:|---:|---:|---:|
+| plain RRF | 0.715 | 0.794 | 0.769 | | |
+| coverage² | 0.759 | 0.839 | 0.814 | +0.045 (+0.012 to +0.083) | 14 / 7 |
+
+That meets the benchmark's rule for changing a default: the held-out
+interval excludes zero and agrees with tune. The gain is not only on
+paraphrases (+0.155, on 5 queries): keyword queries gain 0.057 and questions
+0.025, because a chunk that matches only some of the words no longer
+outranks the vector hits that have the meaning. Phrase and identifier
+queries match every term, so they barely move (−0.001).
+
+The rule also required no BEIR regression beyond noise, judged by the
+paired 95% bootstrap interval of the per-query difference (10,000
+resamples) over the same queries. BEIR improved instead:
+
+| Hybrid nDCG@10 | SciFact | NFCorpus | FiQA |
+|---|---:|---:|---:|
+| plain RRF | 0.712 | 0.350 | 0.351 |
+| coverage² | 0.719 | 0.358 | 0.376 |
+| difference (95% CI) | +0.006 (−0.013 to +0.026) | +0.008 (+0.000 to +0.017) | +0.025 (+0.014 to +0.037) |
+| queries better / worse | 47 / 51 | 63 / 59 | 195 / 118 |
+
+What did not work: changing RRF's `k` barely moves anything (k = 100 changes
+no tune query), and a fixed lower BM25 weight costs keyword and phrase
+queries as much as it saves elsewhere. A rule on the query as a whole (drop
+BM25 when its best hit is weak) helps paraphrases and nothing else. Plain
+coverage, without the square, came second on tune and is also positive on
+BEIR (+0.014 on FiQA, +0.005 on NFCorpus, −0.003 on SciFact), but less so.
+The square is one more choice made on the notes tune half; the held-out and
+BEIR gains, which played no part in choosing it, are the evidence that it
+is not just fitted to it. Counting the terms each hit contains costs 0.02 to
+0.06 ms per query (see [Latency](#latency)).
+
 ### Tuning: chunk size and phrase weight
+
+These sweeps ran with plain RRF, before coverage weighting.
 
 Hybrid nDCG@10 / MRR@10 on the **tune** half:
 
@@ -231,7 +314,12 @@ includes a few microseconds of binding overhead), excluding query embedding.
 | `binary+int8` | 0.07 | 0.06 | 0.52 |
 | `ternary+int8` (default) | 0.10 | 0.08 | 0.85 |
 | `bm25` | 0.05 | 0.01 | 0.27 |
-| `hybrid` | 0.19 | 0.13 | 1.33 |
+| `hybrid` | 0.24 | 0.15 | 1.31 |
+
+`hybrid` was re-measured after coverage weighting; with plain RRF, run back
+to back on the same machine, it took 0.18, 0.13 and 1.27 ms, so counting the
+query terms in each BM25 hit costs 0.02 to 0.06 ms per query. The other rows
+are from the earlier full run.
 
 Embedding the query with bge-small takes about 5 ms on this CPU, more than
 any search here, so for a personal folder the search is never the
@@ -301,6 +389,7 @@ notelight eval path\to\beir-folder --json      # any folder in the BEIR layout
 # the notes benchmark: bundled, no download beyond the model
 notelight eval notes                                        # tune half, defaults
 notelight eval notes --max-chars 600 --phrase-boost 4       # one sweep cell
+notelight eval notes --coverage-power 0                     # plain RRF fusion
 notelight eval notes --split heldout                        # the held-out half
 ```
 

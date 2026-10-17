@@ -142,11 +142,15 @@ class IndexReader:
         candidates: int = 200,
         rrf_k: float = 60.0,
         phrase_boost: float = 1.0,
+        coverage_power: float = 2.0,
     ) -> list[Hit]:
         """Hybrid BM25 + vector search fused with RRF (releases the GIL).
 
         Chunks containing every `"quoted phrase"` in `text` rank first; a
         chunk with all query terms in order gains `phrase_boost / (rrf_k + 1)`.
+        With a `vector`, each BM25 hit counts `(matched / total) ** coverage_power`
+        of a full RRF entry, where it contains `matched` of the query's `total`
+        distinct terms; 0 gives plain RRF.
         """
 
     def search_bm25(self, text: str, k: int) -> list[tuple[int, float]]:

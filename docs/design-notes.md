@@ -1119,11 +1119,28 @@ prerelease version is published under the `next` dist-tag.
 Publishing uses npm trusted publishing (OIDC; npm CLI 11.5.1+, pinned to
 11.19.1 in the workflow): no token is stored, and provenance is attached
 automatically for a public repository (`--provenance` is passed anyway, to be
-explicit). Unlike PyPI, npm has no "pending publisher": a trusted publisher
-can be configured only for a package that already exists, so the first
-version is published by hand, from the tarball CI built (steps in
-`CLAUDE.md`, "Releasing to npm"), and every later version goes through the
-workflow. That first version has no provenance statement.
+explicit). A trusted publisher can be configured only for a package that
+already exists on the registry (npm's docs, checked 2026-10-16). In
+practice the package was created with a placeholder version,
+`0.0.0-stage` ("Temporary package placeholder for staged publishing"), and
+the trusted publisher could then be attached before any real version
+existed, so a workflow publish with provenance was possible for the first
+version too. The placeholder stays in the version list; deprecate it
+(`npm deprecate`) rather than unpublish it.
+
+What happened for 0.2.0 (2026-10-17): it was published by hand from the
+tarball the `workflow_dispatch` run built, seconds before the tag's
+workflow tried; the workflow then failed with "cannot publish over the
+previously published versions", which is harmless. The registry's shasum
+equals the CI-tested tarball's, so the bytes are the tested ones, but 0.2.0
+has no provenance statement. An earlier tag run failed at the version
+check because the tag pointed at a branch commit with the old version; the
+check did its job. Lessons, now in `CLAUDE.md`, "Releasing to npm": tag
+`origin/main` by name, and publish only through the workflow.
+
+A trusted publisher that has not completed a publish expires after 2
+days, so the one attached for 0.2.0 has to be re-created, or checked with
+`npm trust list notelight-wasm`, before the next release.
 
 ### API stability
 

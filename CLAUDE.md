@@ -105,7 +105,7 @@ C++, x64/x86 build tools, Windows SDK).
 | 4 | MCP server (official Python SDK, stdio): search, read_context, list_sources, index_status; demo GIF | done |
 | 5a | Wheels via maturin-action (smoke-tested per OS), sdist, CHANGELOG, PyPI 0.1.0 | done; **0.1.0, 0.1.1 and 0.2.0 published to PyPI (2026-10-16)** (tags `v0.1.0`, `v0.1.1`, `v0.2.0`; version lives in Cargo.toml `[workspace.package]`; trusted publishing via the `pypi` environment, which needs the owner's approval per release) |
 | 5b | Localhost web UI, PDF/DOCX extras, phrase ranking, CLI highlighting | done (PRs #5-#8); ships in 0.1.0 |
-| v2 | Same core compiled to wasm32 + browser app | spike done; query embeddings in the browser done; indexing a folder in the browser done (worker, OPFS/IndexedDB, incremental, parity with the CLI); npm package `notelight-wasm` built and tested, not yet published (see "Releasing to npm") |
+| v2 | Same core compiled to wasm32 + browser app | spike done; query embeddings in the browser done; indexing a folder in the browser done (worker, OPFS/IndexedDB, incremental, parity with the CLI); npm package `notelight-wasm` **0.2.0 published to npm (2026-10-17)**, by hand, no provenance (see "Releasing to npm") |
 
 ## Milestone 2 notes (for whoever picks up M3)
 
@@ -215,35 +215,35 @@ C++, x64/x86 build tools, Windows SDK).
 - `.github/workflows/npm.yml` builds, smoke-tests (3 OSes x Node 22/24) and,
   on an `npm-vX.Y.Z` tag (not `vX.Y.Z`, which is PyPI), publishes the tested
   tarball from the `npm` environment via trusted publishing (OIDC, no token).
-- npm cannot attach a trusted publisher to a package that does not exist,
-  so the first version is published by hand. Owner steps, once:
-  1. npmjs.com: create the account, verify the email, and turn on 2FA
-     ("Authorization and writes").
-  2. GitHub: Settings > Environments > New environment `npm`; required
-     reviewer: yourself; deployment branches and tags: tag pattern `npm-v*`.
-  3. With this merged and Cargo's version equal to the PyPI release to pair
-     with, run the workflow on main and publish its tarball:
-     ```powershell
-     gh workflow run npm.yml --ref main
-     $run = gh run list --workflow npm.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId'
-     gh run watch $run --exit-status
-     gh run download $run -n npm-package -D dist\npm-release
-     npm login
-     npm publish (Get-Item dist\npm-release\notelight-wasm-*.tgz).FullName --access public
-     ```
-     (Wait a few seconds after `gh workflow run` so the list shows the new run.)
-     This first version has no provenance; later ones do. Then drop "not
-     yet published" from README.md, CHANGELOG.md and the status table.
-- Every later release:
-  1. At most 2 days before the first tagged release (an unused trusted
-     publisher expires after 2 days), attach it, once:
+- State: 0.2.0 is on npm (2026-10-17), published by hand from the CI-built
+  tarball (same shasum), so without provenance. The package also lists a
+  `0.0.0-stage` placeholder from its creation; deprecate it with
+  `npm deprecate notelight-wasm@0.0.0-stage "placeholder; use 0.2.0 or later"`.
+  The `npm` environment exists with the tag rule `npm-v*`; give it a
+  required reviewer (the owner) so a tag waits for approval. What happened
+  and why: design notes, "v2: the npm package", "Versions and publishing".
+- Publish only through the workflow; never `npm publish` by hand, or the
+  tag's run fails ("cannot publish over") and the version has no
+  provenance. Owner steps for each release:
+  1. Check the trusted publisher: `npm trust list notelight-wasm`. One that
+     has never completed a publish expires after 2 days, so the one made for
+     0.2.0 is likely gone. Re-create it no more than 2 days before tagging:
      `npm trust github notelight-wasm --repo searope/notelight --file npm.yml --env npm --allow-publish --yes`
-     (npm 11.15+), or on npmjs.com: package > Settings > Trusted publishing >
-     GitHub Actions, user `searope`, repository `notelight`, workflow
-     `npm.yml`, environment `npm`.
-  2. Bump the Cargo version and CHANGELOG as for PyPI, merge, then
-     `git tag -a npm-vX.Y.Z -m "notelight-wasm X.Y.Z"; git push origin npm-vX.Y.Z`
-     and approve the `npm` deployment.
+     (npm 11.15+, 2FA), or on npmjs.com: package > Settings > Trusted
+     publishing > GitHub Actions, user `searope`, repository `notelight`,
+     workflow `npm.yml`, environment `npm`.
+  2. Bump the Cargo version and CHANGELOG as for PyPI and merge. Then tag
+     `origin/main` by name, which works from any worktree (`git switch main`
+     fails in a worktree while main is checked out elsewhere, and a tag on a
+     branch commit fails the workflow's version check):
+     ```powershell
+     git fetch origin
+     git tag -a npm-vX.Y.Z -m "notelight-wasm X.Y.Z" origin/main
+     git push origin npm-vX.Y.Z
+     ```
+     and approve the `npm` deployment. A tag that failed before publishing
+     can be moved: `git push origin :refs/tags/npm-vX.Y.Z; git tag -d npm-vX.Y.Z`,
+     then tag again.
   3. After the first trusted publish works: package > Settings > Publishing
      access > "Require two-factor authentication and disallow tokens", and
      `npm logout`.

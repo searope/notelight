@@ -1,6 +1,7 @@
 # notelight
 
 [![PyPI](https://img.shields.io/pypi/v/notelight.svg)](https://pypi.org/project/notelight/)
+[![npm](https://img.shields.io/npm/v/notelight-wasm.svg)](https://www.npmjs.com/package/notelight-wasm)
 [![CI](https://github.com/searope/notelight/actions/workflows/ci.yml/badge.svg)](https://github.com/searope/notelight/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://github.com/searope/notelight/blob/main/Cargo.toml)
@@ -250,8 +251,9 @@ CLI built and searches it with BM25, or hybrid with a query vector you
 supply, and can chunk text and build an index in memory. It does not include
 the embedding model; the [browser demo](https://searope.github.io/notelight/)
 adds one ([`embed.js`](https://github.com/searope/notelight/blob/main/web-demo/embed.js)).
-Not yet published to npm; [the package README](https://github.com/searope/notelight/blob/main/crates/notelight-wasm/npm/README.md)
-has the API, and `python scripts/build_npm.py --pack` builds the tarball.
+Install it with `npm install notelight-wasm`
+([npm](https://www.npmjs.com/package/notelight-wasm)); [the package README](https://github.com/searope/notelight/blob/main/crates/notelight-wasm/npm/README.md)
+has the API.
 
 ```js
 import init, { Index } from "notelight-wasm";
@@ -385,7 +387,7 @@ After changing Rust code, rebuild with `maturin develop --release`.
 | 4 | MCP server for AI agents | ✅ |
 | 5 | Web UI, PDF/DOCX, phrase ranking; tested wheels for 5 platforms | ✅ |
 | | First PyPI release ([0.1.0](https://pypi.org/project/notelight/0.1.0/)) | ✅ |
-| v2 | Same core compiled to WebAssembly, in-browser app | 🚧 [live demo](https://searope.github.io/notelight/); [spike](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-spike-the-core-in-the-browser): search runs in the browser at native speed; [queries are embedded in the page](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-query-embeddings-in-the-browser) with the same vectors and top 10 as Python, about 10 ms per query on 4 threads (29 ms on 1); [your own folder is indexed in the page](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-indexing-in-the-browser) and kept across reloads, with the same chunks, index bytes and top 10 as the CLI: keywords only in 41 ms for this repo's docs (207 chunks), with bge-small at about 8 chunks/s on 8 threads (native: 14), and updates embed only what changed; npm package next |
+| v2 | Same core compiled to WebAssembly, in-browser app | 🚧 [live demo](https://searope.github.io/notelight/); [spike](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-spike-the-core-in-the-browser): search runs in the browser at native speed; [queries are embedded in the page](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-query-embeddings-in-the-browser) with the same vectors and top 10 as Python, about 10 ms per query on 4 threads (29 ms on 1); [your own folder is indexed in the page](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-indexing-in-the-browser) and kept across reloads, with the same chunks, index bytes and top 10 as the CLI: keywords only in 41 ms for this repo's docs (207 chunks), with bge-small at about 8 chunks/s on 8 threads (native: 14), and updates embed only what changed; the core is [on npm](https://www.npmjs.com/package/notelight-wasm) as `notelight-wasm` |
 
 ## Documentation
 

@@ -87,6 +87,14 @@ jobs:
         run: cargo test -p notelight-wasm --test node --target wasm32-unknown-unknown
       - name: Build the demo package and report its size
         run: python3 scripts/build_wasm.py
+      # The npm package: `npm pack --dry-run` must list exactly the expected
+      # files; then the tarball is installed into a scratch project, searches
+      # the sample index (hybrid top 10 equal to the CLI's) and type-checks.
+      # The OS and Node matrix and publishing are in npm.yml.
+      - name: Build the npm package and check its contents
+        run: python3 scripts/build_npm.py --pack
+      - name: Install the packed npm package and search with it
+        run: python3 scripts/smoke_npm.py dist/npm/notelight-wasm-*.tgz
       # The browser embedder and indexer (web-demo/tests): tokenizer parity
       # with HF tokenizers, the SHA-256 checks, query vectors and top-10 hits
       # against the Python embedder's, and a fixture folder indexed in the

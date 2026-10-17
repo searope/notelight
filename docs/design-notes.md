@@ -1047,4 +1047,105 @@ Python's, and the same hybrid and BM25 top 10 for all 10 queries.
 - **Memory.** The writer holds every chunk in WebAssembly memory before
   `build`; very large folders would want a streaming writer.
 - **npm.** Publish `notelight-wasm` with `chunkText`, `IndexWriter` and
-  `Index`.
+  `Index`: packaged, see "v2: the npm package".
+
+## v2: the npm package
+
+`notelight-wasm` on npm is the crate the demo loads, packaged for other
+JavaScript projects: `scripts/build_npm.py` builds it into `dist/npm/`,
+`scripts/smoke_npm.py` installs the tarball into a scratch project and uses
+it, and `.github/workflows/npm.yml` publishes it. The README the package
+ships is `crates/notelight-wasm/npm/README.md`.
+
+### Name: `notelight-wasm`
+
+Both `notelight` and `notelight-wasm` were free. The package is only the
+retrieval core: no embedder, no folder walk, no CLI. Under the bare name
+`notelight`, people would expect what `pip install notelight` gives them, and
+the name would be taken if a fuller JavaScript package (with the demo's
+embedder and indexer) ever exists. `notelight-wasm` matches the crate and the
+file names wasm-bindgen generates (`notelight_wasm.js`), and says what it is.
+A scope (`@searope/notelight`) would tie the name to a personal account and
+needs an npm user or organisation called `searope`; the unscoped name is
+easier to find and to type.
+
+### One build: `--target web`, plus a Node entry
+
+The package ships the demo's exact files (`wasm-bindgen --target web`): ES
+modules whose default export, `init()`, fetches the `.wasm` from
+`new URL("notelight_wasm_bg.wasm", import.meta.url)`. Browsers run that
+without a bundler, and Vite, webpack 5 and Rollup recognise the pattern and
+emit the `.wasm` as an asset. `--target bundler` would instead import the
+`.wasm` as an ES module, which needs bundler plugins or experimental flags,
+and would mean testing two builds; `--target nodejs` is CommonJS.
+
+Node's `fetch` does not read `file:` URLs, so the `node` export condition
+points to `node.js`, ten lines that read the `.wasm` from disk, call
+`initSync` and re-export everything. `init()` then returns at once, so code
+shared between the browser and Node is the same. Deno and Bun use the `node`
+condition too. `sideEffects` lists only `node.js`: a bundler may drop any
+other unused module, but not the one whose import instantiates the module.
+`engines` says Node 22+, the versions CI tests (22 and 24, on Linux, Windows
+and macOS); Node 20 is past its end of life.
+
+### What it checks
+
+`build_npm.py` fails unless `npm pack --dry-run` lists exactly the nine
+expected files (the four wasm-bindgen outputs, `node.js`, the README, both
+licences and `package.json`), so a stray file cannot ship. The smoke test
+runs from outside the checkout, so `notelight-wasm` resolves to
+`node_modules`: it opens the committed sample index, checks BM25 results,
+checks that hybrid search with the Python embedder's query vectors returns
+the CLI's top 10 for all 14 fixture queries, builds and searches an index in
+memory, and type-checks a TypeScript file against the shipped declarations
+with a pinned TypeScript (5.9.3). That check found that wasm-bindgen's
+declarations use `Symbol.dispose`, so TypeScript users need
+`esnext.disposable` in `lib` (or `skipLibCheck`); the README says so.
+
+The package is 145 KiB packed (382 KiB unpacked; the `.wasm` is 322 KiB, 128
+KiB gzipped).
+
+### Versions and publishing
+
+The version is Cargo's `[workspace.package]` version, the same as the
+Python package's, so `version()` in JavaScript, `notelight version` and the
+index's `created_by` agree. npm releases have their own tags, `npm-vX.Y.Z`,
+because PyPI releases use `vX.Y.Z` and the two need not ship together: the
+npm workflow checks that the tag equals the Cargo version, builds, runs the
+smoke test on every OS, and publishes the tarball it tested from the `npm`
+GitHub environment, which needs the owner's approval, like `pypi`. A
+prerelease version is published under the `next` dist-tag.
+
+Publishing uses npm trusted publishing (OIDC; npm CLI 11.5.1+, pinned to
+11.19.1 in the workflow): no token is stored, and provenance is attached
+automatically for a public repository (`--provenance` is passed anyway, to be
+explicit). Unlike PyPI, npm has no "pending publisher": a trusted publisher
+can be configured only for a package that already exists, so the first
+version is published by hand, from the tarball CI built (steps in
+`CLAUDE.md`, "Releasing to npm"), and every later version goes through the
+workflow. That first version has no provenance statement.
+
+### API stability
+
+The package is 0.x and follows the project's rule: a minor version may
+change the API; a patch version does not. What is likely to change before
+1.0:
+
+- **Argument names in the TypeScript declarations** are still the Rust
+  names (`max_chars`, `heading_path`); positional calls are not affected.
+- **Search options.** `search` takes only `k`; the core's other options
+  (fusion depth, candidate count, RRF constant, phrase bonus) may be exposed,
+  probably as an options object, which would change the signature.
+- **Result shapes** may gain fields (for example phrase-match details);
+  fields are not removed or renamed in a patch release.
+- **`IndexWriter` metadata** is a JSON string today; it may become an
+  object.
+- **The index schema version.** A change to the on-disk layout bumps
+  `SCHEMA_VERSION`; a package then refuses older indexes (`new Index`
+  throws) until they are rebuilt by a matching `notelight index`. This is
+  the same rule as for the Python package, whose version this package
+  shares.
+
+What should stay: the `Index`, `IndexWriter`, `chunkText` and `version`
+names, the bytes-in constructor (the package never touches a filesystem or
+the network), and results as plain objects with camelCase fields.

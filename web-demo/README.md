@@ -59,6 +59,19 @@ itself, for browsers without service workers. Use `serve_demo.py` rather than
 `python -m http.server`, which on Windows often serves `.mjs` as
 `text/plain`, so the browser refuses to load onnxruntime-web.
 
+## The npm package
+
+`pkg/` is also what the npm package `notelight-wasm` ships: the same
+`wasm-bindgen --target web` output, plus a Node entry, its own README and a
+package.json, assembled in `dist/npm/` by `python scripts/build_npm.py --pack`
+(`python scripts/smoke_npm.py dist\npm\notelight-wasm-<version>.tgz`
+installs and tests the tarball). The page imports `./pkg/notelight_wasm.js`
+directly, so it needs no npm install or bundler. The package holds only the
+core (`Index`, `chunkText`, `IndexWriter`); `embed.js`, `tokenizer.js`,
+`ingest.js`, `indexer.js` and `store.js` stay in this folder. See
+`crates/notelight-wasm/npm/README.md` and the design notes, "v2: the npm
+package".
+
 ## Files
 
 | File | What it is |

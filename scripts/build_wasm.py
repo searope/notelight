@@ -47,23 +47,32 @@ def check_cli(expected: str) -> None:
         )
 
 
+def build(out_dir: Path) -> Path:
+    """Compile the crate and generate the `--target web` glue into `out_dir`.
+
+    Returns the path of the processed .wasm file.
+    """
+    check_cli(locked_version("wasm-bindgen"))
+    cargo = ["cargo", "build", "-p", "notelight-wasm", "--target", TARGET, "--profile", PROFILE]
+    subprocess.run(cargo, cwd=ROOT, check=True)
+    wasm = ROOT / "target" / TARGET / PROFILE / "notelight_wasm.wasm"
+    bindgen = ["wasm-bindgen", "--target", "web", "--out-dir", str(out_dir), str(wasm)]
+    subprocess.run(bindgen, cwd=ROOT, check=True)
+    return out_dir / "notelight_wasm_bg.wasm"
+
+
+def report_size(wasm: Path) -> None:
+    raw = wasm.read_bytes()
+    packed = gzip.compress(raw, compresslevel=9)
+    name = wasm.relative_to(ROOT) if wasm.is_relative_to(ROOT) else wasm
+    print(f"{name}: {len(raw) / 1024:.0f} KiB, {len(packed) / 1024:.0f} KiB gzipped")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out-dir", type=Path, default=OUT, help="where to write the package")
     args = parser.parse_args()
-
-    check_cli(locked_version("wasm-bindgen"))
-    build = ["cargo", "build", "-p", "notelight-wasm", "--target", TARGET, "--profile", PROFILE]
-    subprocess.run(build, cwd=ROOT, check=True)
-    wasm = ROOT / "target" / TARGET / PROFILE / "notelight_wasm.wasm"
-    bindgen = ["wasm-bindgen", "--target", "web", "--out-dir", str(args.out_dir), str(wasm)]
-    subprocess.run(bindgen, cwd=ROOT, check=True)
-
-    final = args.out_dir / "notelight_wasm_bg.wasm"
-    raw = final.read_bytes()
-    packed = gzip.compress(raw, compresslevel=9)
-    name = final.relative_to(ROOT)
-    print(f"{name}: {len(raw) / 1024:.0f} KiB, {len(packed) / 1024:.0f} KiB gzipped")
+    report_size(build(args.out_dir.resolve()))
 
 
 if __name__ == "__main__":

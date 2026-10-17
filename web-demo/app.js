@@ -26,6 +26,7 @@ import {
   modelIdOf,
   QueryEmbedder,
 } from "./embed.js";
+import { formatPages, pageRange, pagesByPath } from "./documents.js";
 import { deleteHandle, loadHandle, saveHandle } from "./store.js";
 
 const ORT_URL = "./vendor/onnxruntime-web/ort.wasm.min.mjs";
@@ -38,6 +39,7 @@ let embedder = null; // a QueryEmbedder once loaded, reused across indexes
 let embedderLoading = null; // the pending load, so two indexes do not load it twice
 let useVectors = false; // whether the open index takes our query vectors
 let openId = null; // the stored index that is open, if any
+let openPages = new Map(); // path -> line each page starts on, for the open index's PDFs
 
 function setStatus(text, isError = false) {
   $("status").textContent = text;
@@ -117,12 +119,16 @@ async function prepareVectors(source) {
   if ($("q").value) await search();
 }
 
-/** Open an index from the four files' bytes, show what was loaded, set up search. */
-async function open(files, source, readMs, storedId = null) {
+/**
+ * Open an index from the four files' bytes, show what was loaded, set up
+ * search. `meta` is a stored index's meta.json, for its PDFs' pages.
+ */
+async function open(files, source, readMs, storedId = null, meta = null) {
   index?.free();
   index = null;
   useVectors = false;
   openId = storedId;
+  openPages = pagesByPath(meta);
   const start = performance.now();
   index = new Index(files.manifest, files.docs, files.bm25, files.vectors ?? null);
   const openMs = performance.now() - start;
@@ -236,7 +242,9 @@ async function search() {
     const c = chunks[i];
     const li = $("result").content.firstElementChild.cloneNode(true);
     li.querySelector(".path").textContent = c.path;
-    li.querySelector(".lines").textContent = `lines ${c.lineStart}–${c.lineEnd}`;
+    const starts = openPages.get(c.path);
+    const pages = starts ? ` (${formatPages(...pageRange(starts, c.lineStart, c.lineEnd))})` : "";
+    li.querySelector(".lines").textContent = `lines ${c.lineStart}–${c.lineEnd}${pages}`;
     li.querySelector(".headings").textContent = c.headingPath.join(" › ");
     li.querySelector(".text").append(highlighted(c.text, query));
     li.querySelector(".score").textContent =
@@ -385,6 +393,14 @@ function describeSync(stats, name) {
       `${stats.chunks.toLocaleString()} chunks in ${ms(t.total)}: ` +
       `${fmtRate(rate(stats.chunks, t.total))} chunks/s, ${fmtRate(mib / (t.total / 1000))} MiB/s.`,
   ];
+  if (stats.pdfs) {
+    parts.push(
+      `Extracted ${stats.pdfs.toLocaleString()} PDF${stats.pdfs === 1 ? "" : "s"} ` +
+        `(${stats.pdfPages.toLocaleString()} pages, ${kib(stats.pdfBytes)}) in ${ms(t.extract)}: ` +
+        `${fmtRate(rate(stats.pdfPages, t.extract))} pages/s` +
+        (t.pdfjs ? `; pdf.js loaded in ${ms(t.pdfjs)} (not counted above).` : "."),
+    );
+  }
   if (stats.embedder) {
     parts.push(
       stats.embedded
@@ -470,7 +486,7 @@ async function runIndex({ id = null, name, source, semantic }) {
     showSkipped(stats.skipped);
     await refreshStored();
     if (files) {
-      await open(files, meta.name, 0, meta.id);
+      await open(files, meta.name, 0, meta.id, meta);
     } else if (openId !== meta.id) {
       await openStored(meta);
     }
@@ -490,8 +506,8 @@ async function runIndex({ id = null, name, source, semantic }) {
 async function openStored(meta) {
   setStatus(`Opening ${meta.name}…`);
   const start = performance.now();
-  const { files } = await call("load", { id: meta.id });
-  await open(files, meta.name, performance.now() - start, meta.id);
+  const loaded = await call("load", { id: meta.id });
+  await open(loaded.files, meta.name, performance.now() - start, meta.id, loaded.meta);
 }
 
 /** Pick a folder: the File System Access API where there is one, else the input. */

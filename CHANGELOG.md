@@ -8,6 +8,29 @@ format is detected and rebuilt by `notelight index`.
 
 ## [Unreleased]
 
+### Added
+
+- **PDFs in the browser app.** A folder indexed in the page now includes the
+  text of its PDFs, extracted in the indexing worker with pdf.js 6.3.289
+  (vendored by `scripts/vendor_pdfjs.py`: pinned, SHA-512 tarball and
+  SHA-256 per file, Apache-2.0; no CDN). pdf.js is loaded only when a folder
+  has a PDF to read: 1.75 MiB, 529 KiB gzipped, plus CMap files fetched only
+  by PDFs with CJK fonts. Same contract as the CLI: pages joined with form
+  feeds, citations are lines of the extracted text, and results show
+  `p. 3` / `pp. 3-4` beside them, from page starts kept per file in the
+  index's `meta.json`. Encrypted PDFs are tried with the empty password,
+  then skipped like image-only and unreadable ones, with the CLI's reasons.
+  The extractor id (`pdf1:pdfjs-6.3.289`) is part of the chunk cache key,
+  so a new pdf.js re-extracts. pdf.js and pypdf extract text differently
+  (mostly whitespace: 99.0 to 99.96% of non-blank lines agree on three real
+  documents), so a PDF's chunks and line numbers in the browser are not the
+  CLI's. Measured in Chrome 155 on one thread: 52 to 168 pages/s,
+  0.6 to 2.0 MiB/s (pypdf natively on the same files: 12 to 21 pages/s).
+  Tests: generated fixture PDFs (multi-page with a blank page, page-to-line
+  mapping, empty-password and password encryption, Japanese through a
+  predefined CMap, image-only, broken) and a Markdown + PDF folder indexed
+  and searched, under Node in CI. DOCX is still skipped in the browser.
+
 ## [0.2.0] - 2026-10-16
 
 The Python package gains the notes benchmark (`notelight eval notes`) and

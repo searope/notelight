@@ -12,8 +12,9 @@ A Rust retrieval engine with a Python interface, a CLI, and an MCP server, with
 retrieval quality you can measure.
 [How it works](https://github.com/searope/notelight/blob/main/docs/how-it-works.md) walks through the design end to end in a few minutes.
 **[Try it in your browser](https://searope.github.io/notelight/)**: the same
-Rust core as WebAssembly. Index a folder of your own notes or search this
-repository's docs, entirely on your machine: files never leave the browser,
+Rust core as WebAssembly. Index a folder of your own notes (Markdown, text
+and PDF) or search this repository's docs, entirely on your machine: files
+never leave the browser,
 and the only download is the 127 MiB model, once.
 
 > **Status: 0.2.0, alpha.** You can index a folder of notes, search it
@@ -387,7 +388,7 @@ After changing Rust code, rebuild with `maturin develop --release`.
 | 4 | MCP server for AI agents | ✅ |
 | 5 | Web UI, PDF/DOCX, phrase ranking; tested wheels for 5 platforms | ✅ |
 | | First PyPI release ([0.1.0](https://pypi.org/project/notelight/0.1.0/)) | ✅ |
-| v2 | Same core compiled to WebAssembly, in-browser app | 🚧 [live demo](https://searope.github.io/notelight/); [spike](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-spike-the-core-in-the-browser): search runs in the browser at native speed; [queries are embedded in the page](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-query-embeddings-in-the-browser) with the same vectors and top 10 as Python, about 10 ms per query on 4 threads (29 ms on 1); [your own folder is indexed in the page](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-indexing-in-the-browser) and kept across reloads, with the same chunks, index bytes and top 10 as the CLI: keywords only in 41 ms for this repo's docs (207 chunks), with bge-small at about 8 chunks/s on 8 threads (native: 14), and updates embed only what changed; the core is [on npm](https://www.npmjs.com/package/notelight-wasm) as `notelight-wasm` |
+| v2 | Same core compiled to WebAssembly, in-browser app | 🚧 [live demo](https://searope.github.io/notelight/); [spike](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-spike-the-core-in-the-browser): search runs in the browser at native speed; [queries are embedded in the page](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-query-embeddings-in-the-browser) with the same vectors and top 10 as Python, about 10 ms per query on 4 threads (29 ms on 1); [your own folder is indexed in the page](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-indexing-in-the-browser) and kept across reloads, with the same chunks, index bytes and top 10 as the CLI: keywords only in 41 ms for this repo's docs (207 chunks), with bge-small at about 8 chunks/s on 8 threads (native: 14), and updates embed only what changed; [PDFs are read in the page too](https://github.com/searope/notelight/blob/main/docs/design-notes.md#v2-pdfs-in-the-browser) with pdf.js (loaded only for folders with PDFs, 529 KiB gzipped), at 52 to 168 pages/s on one thread on three real documents, with pages beside the cited lines as in the CLI; the core is [on npm](https://www.npmjs.com/package/notelight-wasm) as `notelight-wasm` |
 
 ## Documentation
 

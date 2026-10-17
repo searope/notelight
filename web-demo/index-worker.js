@@ -14,8 +14,11 @@
 // `source` is {handle} (a FileSystemDirectoryHandle) or {files: [{path, file}]}
 // from <input webkitdirectory>. Files are read here and never leave the
 // browser; the only network request is the model download (embed.js).
+// pdf.js (documents.js) is loaded from vendor/pdfjs/ the first time a folder
+// has a PDF to read, and runs in this worker.
 import init, * as wasm from "./pkg/notelight_wasm.js";
 import { BGE_SMALL_EN_V15, browserCache, modelIdOf, QueryEmbedder } from "./embed.js";
+import { lazyPdfExtractor } from "./documents.js";
 import { fromDirectoryHandle, fromFiles } from "./ingest.js";
 import { CancelledError, deleteIndex, listIndexes, loadGeneration, newIndexId, readMeta, syncFolder } from "./indexer.js";
 import { openStore } from "./store.js";
@@ -97,6 +100,7 @@ const ops = {
         return model.embedDocuments(texts, options);
       },
     };
+    const pdf = lazyPdfExtractor();
     try {
       return await withLock(id, async () => {
         const root = source.handle ? fromDirectoryHandle(source.handle) : fromFiles(source.files);
@@ -107,13 +111,16 @@ const ops = {
           id,
           name,
           embedder: semantic ? lazy : null,
+          pdf,
           onProgress: report,
           signal: controller.signal,
         });
-        // Loading the model is reported on its own, not as indexing time.
+        // Loading the model and pdf.js is reported on its own, not as indexing time.
         stats.ms.model = modelMs;
         if (stats.ms.embed) stats.ms.embed -= modelMs;
-        stats.ms.total -= modelMs;
+        stats.ms.pdfjs = pdf.loadMs;
+        stats.ms.extract -= pdf.loadMs;
+        stats.ms.total -= modelMs + pdf.loadMs;
         stats.threads = model ? threads : null;
         const meta = await readMeta(store, id);
         return { result: { stats, meta, files }, transfer: transferables(files) };

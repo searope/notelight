@@ -33,9 +33,11 @@
       <label class="check"><input id="semantic" type="checkbox" checked> Semantic search (bge-small, 127 MiB once)</label>
     </div>
     <p class="hint">
-      Reads <code>.md</code>, <code>.markdown</code> and <code>.txt</code> files,
-      skipping hidden and build folders and whatever a <code>.notelightignore</code>
-      lists, as the CLI does; PDF and DOCX are skipped for now. Updating an index
+      Reads <code>.md</code>, <code>.markdown</code>, <code>.txt</code> and the
+      text of <code>.pdf</code> files (with pdf.js, loaded only for folders with
+      PDFs), skipping hidden and build folders and whatever a
+      <code>.notelightignore</code> lists, as the CLI does; DOCX is skipped for
+      now. PDF results show their pages beside the lines. Updating an index
       embeds only the chunks that changed. Without semantic search the index is
       keywords only and the model is not needed.
     </p>

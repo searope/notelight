@@ -37,13 +37,15 @@ python/notelight/        Python package: embed.py, ingest.py, documents.py (PDF/
                          download.py, eval/ (datasets, notes benchmark, metrics, NumPy baseline, runner, report)
                          web/ (`notelight serve`: FastAPI over NotesService + static/ page)
 scripts/                 make_demo_gif.py (README demo GIF from a real MCP session),
-                         build_wasm.py (-> web-demo/pkg), vendor_ort.py (-> web-demo/vendor),
+                         build_wasm.py (-> web-demo/pkg), vendor_ort.py + vendor_pdfjs.py (-> web-demo/vendor),
+                         make_pdf_fixtures.py (PDFs for web-demo/tests),
                          build_npm.py (-> dist/npm, npm package), smoke_npm.py (installs the tarball, searches),
                          serve_demo.py, make_sample_index.py (+ parity fixture),
                          make_tokenizer_fixture.py, make_indexing_fixture.py, wasi_run.mjs
 web-demo/                static browser app: wasm build, embed.js + tokenizer.js (bge-small via
                          onnxruntime-web), ingest.js + indexer.js + store.js + index-worker.js
-                         (index a folder in the browser, OPFS/IndexedDB), sample index, tests/
+                         (index a folder in the browser, OPFS/IndexedDB), documents.js (PDF text
+                         via pdf.js), sample index, tests/
 tests/                   pytest
 docs/                    design-notes.md, index-format.md (spec), results.md (BEIR numbers), learning/
 ```
@@ -67,6 +69,7 @@ cargo test --target wasm32-unknown-unknown -p notelight-wasm --test node   # JS 
 cargo test --target wasm32-wasip1 -p notelight-core --lib                  # core unit tests as wasm32
 python scripts/build_wasm.py                                              # web-demo/pkg + size report
 python scripts/vendor_ort.py                                              # onnxruntime-web -> web-demo/vendor
+python scripts/vendor_pdfjs.py                                            # pdf.js -> web-demo/vendor/pdfjs
 node --test "web-demo/tests/*.test.mjs"                                   # browser embedder parity (Node)
 python scripts/serve_demo.py [--isolated]                                 # demo on 127.0.0.1:8000
 ```
@@ -188,6 +191,14 @@ C++, x64/x86 build tools, Windows SDK).
   `web-demo/tests/fixtures/indexing.json`). Browser storage layout
   (`meta.json`, `embeddings.bin`) is in the design notes, "v2: indexing in
   the browser"; generation files are the normal index format.
+- PDFs in the browser: `documents.js` mirrors `documents.py`'s page layout
+  (form feeds, `page_starts`, `page_range`, skip reasons) with pdf.js, which
+  is pinned in `scripts/vendor_pdfjs.py` and runs inside the indexing
+  worker. Its text differs from pypdf's by design; don't try to make
+  browser PDF chunks match the CLI's. Bumping pdf.js means new hashes in the
+  script and `PDFJS_VERSION` in `documents.js` (a test checks they match),
+  which re-extracts PDFs in existing browser indexes. Decisions and numbers:
+  design notes, "v2: PDFs in the browser".
 
 ## Releasing (milestone 5a)
 

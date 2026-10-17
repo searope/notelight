@@ -6,8 +6,9 @@
 //   are common build and dependency directories (SKIP_DIRS);
 // - a `.notelightignore` file at the folder root uses .gitignore syntax, with
 //   the semantics of pathspec's `GitIgnoreSpec` (ported below);
-// - only .md, .markdown and .txt are read, up to 10 MiB each; PDF and DOCX are
-//   found (up to 50 MiB) so the indexer can say why it skips them;
+// - .md, .markdown and .txt are read, up to 10 MiB each; PDF and DOCX are
+//   found up to 50 MiB, and the indexer extracts PDFs (documents.js) and
+//   says why it skips DOCX;
 // - files with a NUL byte in the first 8 KiB are binary; text is UTF-8 (with
 //   or without a BOM), else Windows-1252, with line endings normalized to \n.
 //

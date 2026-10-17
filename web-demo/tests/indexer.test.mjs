@@ -19,12 +19,13 @@ import { dirname, join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { pathToFileURL } from "node:url";
 
+import { DOCX_SKIP_REASON } from "../documents.js";
 import { BGE_SMALL_EN_V15 as SPEC, modelIdOf, QueryEmbedder } from "../embed.js";
 import {
   CancelledError,
   decodeEmbeddings,
   deleteIndex,
-  DOCUMENT_SKIP_REASON,
+  PDF_UNAVAILABLE_REASON,
   embeddingKey,
   embeddingText,
   encodeEmbeddings,
@@ -362,7 +363,8 @@ describe("indexing with the wasm core", () => {
     assert.equal(stats.chunks, 100);
   });
 
-  test("PDF and DOCX are skipped with a note", async (t) => {
+  // PDFs with an extractor: documents.test.mjs.
+  test("DOCX is skipped with a note, and PDFs when there is no extractor", async (t) => {
     if (!requireOrSkip(t, wasm, "web-demo/pkg is not built (python scripts/build_wasm.py)")) return;
     const file = (text) => {
       const bytes = new TextEncoder().encode(text);
@@ -375,8 +377,8 @@ describe("indexing with the wasm core", () => {
     ]);
     const { stats } = await syncFolder({ wasm, store: memoryStore(), root, id: "d", embedder: null });
     assert.deepEqual(stats.skipped, [
-      { path: "letter.DOCX", reason: DOCUMENT_SKIP_REASON },
-      { path: "paper.pdf", reason: DOCUMENT_SKIP_REASON },
+      { path: "letter.DOCX", reason: DOCX_SKIP_REASON },
+      { path: "paper.pdf", reason: PDF_UNAVAILABLE_REASON },
     ]);
     assert.equal(stats.files, 1);
   });

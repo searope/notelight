@@ -52,6 +52,88 @@ function setModelStatus(text, isError = false) {
   $("model-status").classList.toggle("error", isError);
 }
 
+/**
+ * The activity bar at the top of the window: shows what the page is doing
+ * while it works. `begin(text)` returns a job with `update(text, done, total)`
+ * (a known `total` shows a progress bar) and `end()`; the newest unfinished job
+ * is shown. `delay` ms hides jobs that finish quickly, so a 10 ms search does
+ * not flash the bar.
+ */
+const activity = (() => {
+  const jobs = [];
+  function render() {
+    const top = [...jobs].reverse().find((j) => j.visible);
+    $("activity").hidden = !top;
+    document.body.setAttribute("aria-busy", String(jobs.length > 0));
+    if (!top) return;
+    $("activity-text").textContent = top.text;
+    const bar = $("activity-bar");
+    bar.hidden = !(top.total > 0);
+    if (top.total > 0) {
+      bar.max = top.total;
+      bar.value = Math.min(top.done, top.total);
+    }
+  }
+  return {
+    begin(text, { delay = 0 } = {}) {
+      const job = { text, done: 0, total: 0, visible: delay === 0 };
+      jobs.push(job);
+      if (delay > 0) {
+        job.timer = setTimeout(() => {
+          job.visible = true;
+          render();
+        }, delay);
+      }
+      render();
+      return {
+        update(newText, done = 0, total = 0) {
+          Object.assign(job, { text: newText ?? job.text, done, total });
+          render();
+        },
+        end() {
+          clearTimeout(job.timer);
+          const i = jobs.indexOf(job);
+          if (i >= 0) jobs.splice(i, 1);
+          render();
+        },
+      };
+    },
+  };
+})();
+
+/** Run `fn` with the activity bar showing `text`; the job is passed to `fn`. */
+async function busy(text, fn, options) {
+  const job = activity.begin(text, options);
+  try {
+    return await fn(job);
+  } finally {
+    job.end();
+  }
+}
+
+/**
+ * Controls that start a load or an indexing run are disabled while one is in
+ * progress, so a second click cannot start another on top of it.
+ */
+let uiLocks = 0;
+let indexingReady = false;
+function setLocked(locked) {
+  uiLocks += locked ? 1 : -1;
+  const off = uiLocks > 0;
+  $("load-sample").disabled = off;
+  $("pick").disabled = off;
+  $("index-folder").disabled = off || !indexingReady;
+  for (const b of document.querySelectorAll("#stored button")) b.disabled = off;
+}
+async function locked(fn) {
+  setLocked(true);
+  try {
+    return await fn();
+  } finally {
+    setLocked(false);
+  }
+}
+
 const kib = (n) => (n / 1024 >= 1024 ? `${(n / 1048576).toFixed(1)} MiB` : `${Math.round(n / 1024)} KiB`);
 const ms = (x) => (x >= 1000 ? `${(x / 1000).toFixed(1)} s` : `${x.toFixed(0)} ms`);
 
@@ -69,16 +151,30 @@ function loadEmbedder() {
     const threaded = crossOriginIsolated && params.get("threads") !== "1";
     ort.env.wasm.numThreads = threaded ? Math.min(4, navigator.hardwareConcurrency) : 1;
     const cache = await browserCache(CACHE_NAME);
+    const job = activity.begin("Loading the bge-small model…");
     const onProgress = ({ file, received, total }) => {
       if (file === BGE_SMALL_EN_V15.onnx.path) {
-        setModelStatus(`Downloading bge-small (one time): ${kib(received)} of ${kib(total)}…`);
+        const text = `Downloading bge-small (one time): ${kib(received)} of ${kib(total)}`;
+        setModelStatus(`${text}…`);
+        job.update(text, received, total);
+      }
+    };
+    const onStage = ({ stage, file }) => {
+      if (stage === "verify" && file === BGE_SMALL_EN_V15.onnx.path) {
+        job.update("Checking the model's SHA-256…");
+      } else if (stage === "session") {
+        job.update("Starting the model…");
       }
     };
     setModelStatus("Loading the bge-small query embedder…");
-    const loaded = await QueryEmbedder.load(ort, { mirror: params.get("model"), cache, onProgress });
-    loaded.timings.threads = ort.env.wasm.numThreads;
-    window.embedderTimings = loaded.timings; // for measuring from DevTools
-    return loaded;
+    try {
+      const loaded = await QueryEmbedder.load(ort, { mirror: params.get("model"), cache, onProgress, onStage });
+      loaded.timings.threads = ort.env.wasm.numThreads;
+      window.embedderTimings = loaded.timings; // for measuring from DevTools
+      return loaded;
+    } finally {
+      job.end();
+    }
   })();
   return embedderLoading;
 }
@@ -141,13 +237,28 @@ async function open(files, source, readMs, storedId = null, meta = null) {
   $("search").hidden = false;
   $("results").replaceChildren();
   $("timing").textContent = "";
-  $("q").focus();
+  // The search box sits below both ways of getting an index; bring it into
+  // view so it is obvious the index is ready to search.
+  $("status").textContent += " Search it below.";
+  $("search").scrollIntoView({ block: "center", behavior: "smooth" });
+  $("search").classList.remove("ready");
+  void $("search").offsetWidth; // restart the highlight animation
+  $("search").classList.add("ready");
+  $("q").focus({ preventScroll: true });
   if ($("q").value) await search();
-  await prepareVectors(source);
+  // The index is searchable by keywords now; the embedder (a 127 MiB download
+  // the first time) loads in the background, shown in the activity bar, and
+  // search becomes hybrid when it is ready. Not awaited, so the controls are
+  // not locked for the whole download. prepareVectors reports its own errors.
+  prepareVectors(source).catch((e) => setModelStatus(e.message ?? String(e), true));
 }
 
 /** Fetch a generation's files from a URL folder (the sample, or ?index=). */
 async function loadFromUrl(base, label) {
+  await locked(() => busy(`Loading ${label}…`, () => fetchIndex(base, label)));
+}
+
+async function fetchIndex(base, label) {
   const dir = base.endsWith("/") ? base : `${base}/`;
   const get = async (name) => {
     const r = await fetch(dir + name);
@@ -228,8 +339,19 @@ async function search() {
   if (!index || !query) return;
   const k = Number($("k").value);
   const searched = index; // another index may open while the query is embedded
+  const submit = $("search").querySelector('button[type="submit"]');
+  submit.disabled = true;
+  $("results").setAttribute("aria-busy", "true");
   let start = performance.now();
-  const vector = useVectors ? await embedder.embedQuery(query) : null;
+  let vector;
+  try {
+    vector = useVectors
+      ? await busy("Embedding the query…", () => embedder.embedQuery(query), { delay: 150 })
+      : null;
+  } finally {
+    submit.disabled = false;
+    $("results").removeAttribute("aria-busy");
+  }
   const embedMs = performance.now() - start;
   if (index !== searched) return;
   start = performance.now();
@@ -264,6 +386,7 @@ async function runBench() {
   button.disabled = true;
   $("bench-out").hidden = false;
   $("bench-out").textContent = "Running…";
+  const job = activity.begin("Running the benchmark…");
   try {
     const url = params.get("bench") ?? "bench-queries.json";
     const { queries } = await (await fetch(url)).json();
@@ -280,6 +403,7 @@ async function runBench() {
   } catch (e) {
     $("bench-out").textContent = `Benchmark failed: ${e.message}`;
   } finally {
+    job.end();
     button.disabled = false;
   }
 }
@@ -364,6 +488,8 @@ const STAGES = {
   done: "Done",
 };
 
+let indexJob = null; // the activity-bar job of the running indexing run
+
 function showProgress({ stage, done, total }) {
   const bar = $("progress-bar");
   if (total > 0) {
@@ -374,8 +500,9 @@ function showProgress({ stage, done, total }) {
   }
   let text = STAGES[stage] ?? stage;
   if (stage === "model" && total > 0) text = `Downloading bge-small (one time): ${kib(done)} of ${kib(total)}`;
-  else if (total > 0) text += `: ${done.toLocaleString()} of ${total.toLocaleString()}`;
+  else if (total > 0) text = `${text.replace(/…$/, "")}: ${done.toLocaleString()} of ${total.toLocaleString()}`;
   $("progress-text").textContent = text;
+  indexJob?.update(text, done, total);
 }
 
 const rate = (n, msTaken) => (msTaken > 0 ? n / (msTaken / 1000) : 0);
@@ -459,13 +586,14 @@ async function refreshStored() {
 }
 
 let storeKind = null;
-let busy = false;
+let indexing = false;
 
 /** Index (or update) a folder in the worker, then open the result. */
 async function runIndex({ id = null, name, source, semantic }) {
-  if (busy) return;
-  busy = true;
-  $("index-folder").disabled = true;
+  if (indexing) return;
+  indexing = true;
+  setLocked(true);
+  indexJob = activity.begin(`Indexing ${name}…`);
   $("progress").hidden = false;
   $("cancel").disabled = false;
   setIndexStatus("");
@@ -488,7 +616,7 @@ async function runIndex({ id = null, name, source, semantic }) {
     if (files) {
       await open(files, meta.name, 0, meta.id, meta);
     } else if (openId !== meta.id) {
-      await openStored(meta);
+      await loadStored(meta);
     }
   } catch (e) {
     const cancelled = e.name === "AbortError";
@@ -497,17 +625,25 @@ async function runIndex({ id = null, name, source, semantic }) {
       !cancelled,
     );
   } finally {
-    busy = false;
-    $("index-folder").disabled = false;
+    indexing = false;
+    indexJob.end();
+    indexJob = null;
+    setLocked(false);
     $("progress").hidden = true;
   }
 }
 
 async function openStored(meta) {
-  setStatus(`Opening ${meta.name}…`);
-  const start = performance.now();
-  const loaded = await call("load", { id: meta.id });
-  await open(loaded.files, meta.name, performance.now() - start, meta.id, loaded.meta);
+  await locked(() => loadStored(meta));
+}
+
+async function loadStored(meta) {
+  await busy(`Opening ${meta.name}…`, async () => {
+    setStatus(`Opening ${meta.name}…`);
+    const start = performance.now();
+    const loaded = await call("load", { id: meta.id });
+    await open(loaded.files, meta.name, performance.now() - start, meta.id, loaded.meta);
+  });
 }
 
 /** Pick a folder: the File System Access API where there is one, else the input. */
@@ -543,7 +679,7 @@ async function storedAction(action, meta) {
     }
   } else if (action === "delete") {
     if (!confirm(`Delete the index of ${meta.name} from this browser? Your files are not touched.`)) return;
-    await call("delete", { id: meta.id });
+    await locked(() => busy(`Deleting ${meta.name}…`, () => call("delete", { id: meta.id })));
     await deleteHandle(meta.id).catch(() => {});
     if (openId === meta.id) {
       index?.free();
@@ -565,7 +701,7 @@ async function setUpIndexing() {
     // Indexing embeds hundreds of chunks, where 8 threads are 1.5x faster than
     // 4 (design notes, "v2: indexing in the browser"); queries stay on 4.
     const threads = params.get("threads") === "1" ? 1 : Number(params.get("index-threads")) || 8;
-    ({ store: storeKind } = await call("init", { threads }));
+    ({ store: storeKind } = await busy("Starting the indexer…", () => call("init", { threads })));
   } catch (e) {
     setIndexStatus(`Indexing is not available in this browser (${e.message}).`, true);
     return;
@@ -577,7 +713,8 @@ async function setUpIndexing() {
       setIndexStatus(e.message ?? String(e), true);
     }
   };
-  $("index-folder").disabled = false;
+  indexingReady = true;
+  $("index-folder").disabled = uiLocks > 0;
   $("index-folder").addEventListener("click", guard(() => pickFolder()));
   $("index-pick").addEventListener(
     "change",
@@ -597,13 +734,13 @@ async function setUpIndexing() {
     $("progress-text").textContent = "Cancelling after the current batch…";
     worker.postMessage({ op: "cancel" });
   });
-  await guard(refreshStored)();
+  await guard(() => busy("Listing your stored indexes…", refreshStored))();
 }
 
 async function main() {
   if (await isolate()) return;
   try {
-    await init();
+    await busy("Loading the WebAssembly module…", () => init());
   } catch (e) {
     setStatus(`Could not load the WebAssembly module (${e.message}). Build it with: python scripts/build_wasm.py`, true);
     return;
@@ -624,9 +761,13 @@ async function main() {
     guard(async (ev) => {
       if (!ev.target.files.length) return;
       setStatus("Reading files…");
-      const start = performance.now();
-      const { dir, files } = await generationFiles(ev.target.files);
-      await open(files, dir, performance.now() - start);
+      await locked(() =>
+        busy("Reading the index files…", async () => {
+          const start = performance.now();
+          const { dir, files } = await generationFiles(ev.target.files);
+          await open(files, dir, performance.now() - start);
+        }),
+      );
     }),
   );
   $("search").addEventListener("submit", (ev) => {

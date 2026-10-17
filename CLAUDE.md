@@ -101,7 +101,7 @@ C++, x64/x86 build tools, Windows SDK).
 | 2 | Python package: bindings, embedder, incremental indexer, CLI | done |
 | 3 | Eval: BEIR (SciFact, NFCorpus, FiQA) recall@10/nDCG@10 for f32, int8, binary, binary+rescore, ternary+rescore, BM25, hybrid; Rust vs NumPy baseline | done |
 | 4 | MCP server (official Python SDK, stdio): search, read_context, list_sources, index_status; demo GIF | done |
-| 5a | Wheels via maturin-action (smoke-tested per OS), sdist, CHANGELOG, PyPI 0.1.0 | done; **0.1.0 and 0.1.1 published to PyPI 2026-10-16** (tags `v0.1.0`, `v0.1.1`; version lives in Cargo.toml `[workspace.package]`; trusted publishing via the `pypi` environment, which needs the owner's approval per release) |
+| 5a | Wheels via maturin-action (smoke-tested per OS), sdist, CHANGELOG, PyPI 0.1.0 | done; **0.1.0, 0.1.1 and 0.2.0 published to PyPI (2026-10-16)** (tags `v0.1.0`, `v0.1.1`, `v0.2.0`; version lives in Cargo.toml `[workspace.package]`; trusted publishing via the `pypi` environment, which needs the owner's approval per release) |
 | 5b | Localhost web UI, PDF/DOCX extras, phrase ranking, CLI highlighting | done (PRs #5-#8); ships in 0.1.0 |
 | v2 | Same core compiled to wasm32 + browser app | spike done; query embeddings in the browser done; indexing a folder in the browser done (worker, OPFS/IndexedDB, incremental, parity with the CLI); npm package next |
 

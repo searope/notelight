@@ -15,7 +15,7 @@ Rust core as WebAssembly. Index a folder of your own notes or search this
 repository's docs, entirely on your machine: files never leave the browser,
 and the only download is the 127 MiB model, once.
 
-> **Status: 0.1.1, alpha.** You can index a folder of notes, search it
+> **Status: 0.2.0, alpha.** You can index a folder of notes, search it
 > from the command line or [from Claude, Cursor and other AI agents over
 > MCP](#use-with-claude--cursor) or [in your browser](#web-ui), include
 > [PDF and DOCX files](#pdf-and-docx), and measure retrieval quality on

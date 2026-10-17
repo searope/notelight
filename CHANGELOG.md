@@ -8,6 +8,13 @@ format is detected and rebuilt by `notelight index`.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-16
+
+The Python package gains the notes benchmark (`notelight eval notes`) and
+richer eval output. The browser app (indexing, query embeddings, the Pages
+demo at https://searope.github.io/notelight/) lives in this repository and
+the demo; it is not part of the PyPI package.
+
 ### Added
 
 - **Indexing in the browser.** The demo page indexes a folder you pick
@@ -180,6 +187,7 @@ regression test:
 - Changing the chunk size no longer empties the file cache before the new
   generation commits.
 
-[Unreleased]: https://github.com/searope/notelight/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/searope/notelight/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/searope/notelight/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/searope/notelight/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/searope/notelight/releases/tag/v0.1.0

@@ -1,0 +1,123 @@
+name: npm
+
+# Builds the notelight-wasm npm package (the Rust core as WebAssembly, the same
+# build the browser demo loads), checks what it ships, installs the tarball on
+# every OS and two Node versions and searches the sample index with it.
+# Publishing happens only for `npm-v*` tags (separate from the PyPI `v*`
+# tags), only after every smoke test passes, from the `npm` environment (the
+# owner approves each release), via npm trusted publishing: OIDC, no token
+# stored anywhere, provenance attached.
+on:
+  push:
+    tags: ["npm-v*"]
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - crates/notelight-core/**
+      - crates/notelight-wasm/**
+      - scripts/build_wasm.py
+      - scripts/build_npm.py
+      - scripts/smoke_npm.py
+      - .github/workflows/npm.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  package:
+    name: Build the package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Same pinned toolchain as the CI wasm job and the Pages build.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.0
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Tag matches the package version
+        if: startsWith(github.ref, 'refs/tags/npm-v')
+        run: |
+          version=$(python3 scripts/build_npm.py --print-version)
+          if [ "${GITHUB_REF_NAME#npm-v}" != "$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match the Cargo.toml version $version"
+            exit 1
+          fi
+      - name: Install wasm-bindgen-cli (the version Cargo.lock pins)
+        run: |
+          version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
+          cargo install wasm-bindgen-cli --version "$version" --locked
+      - name: Build, check the contents (npm pack --dry-run) and pack
+        run: python3 scripts/build_npm.py --pack
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-package
+          path: dist/npm/*.tgz
+          if-no-files-found: error
+
+  # Install the tarball the way a user would: a scratch project outside the
+  # checkout, `npm install <tarball>`, then search the committed sample index
+  # (hybrid top 10 equal to the Python CLI's) and type-check the declarations.
+  smoke:
+    name: Smoke on ${{ matrix.os }}, Node ${{ matrix.node }}
+    needs: package
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [22, 24]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # For the sample index, the query fixture and the smoke scripts.
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-package
+          path: dist/npm
+      - run: python scripts/smoke_npm.py dist/npm/notelight-wasm-*.tgz
+
+  publish:
+    name: Publish to npm
+    if: startsWith(github.ref, 'refs/tags/npm-v')
+    needs: [package, smoke]
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write # trusted publishing and provenance; no npm token in the repo
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      # Trusted publishing needs npm 11.5.1+; pin the CLI that publishes.
+      - run: npm install --global npm@11.19.1
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-package
+          path: dist/npm
+      - name: Publish the tested tarball
+        run: |
+          ls -l dist/npm
+          tarball=$(ls dist/npm/notelight-wasm-*.tgz)
+          version=${GITHUB_REF_NAME#npm-v}
+          # A prerelease (0.2.0-rc.1) must not become `latest`.
+          case "$version" in *-*) tag=next ;; *) tag=latest ;; esac
+          npm publish "$tarball" --provenance --access public --tag "$tag"

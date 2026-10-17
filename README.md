@@ -242,6 +242,27 @@ files the index covers, through the same checks as the MCP server's
 `read_context`. It refuses requests whose `Host` header is not a loopback
 name, which blocks DNS-rebinding attacks from other web pages.
 
+## Use from JavaScript
+
+The Rust core is also an npm package, `notelight-wasm` (WebAssembly, about
+130 KiB gzipped, for browsers, bundlers and Node 22+). It opens an index the
+CLI built and searches it with BM25, or hybrid with a query vector you
+supply, and can chunk text and build an index in memory. It does not include
+the embedding model; the [browser demo](https://searope.github.io/notelight/)
+adds one ([`embed.js`](https://github.com/searope/notelight/blob/main/web-demo/embed.js)).
+Not yet published to npm; [the package README](https://github.com/searope/notelight/blob/main/crates/notelight-wasm/npm/README.md)
+has the API, and `python scripts/build_npm.py --pack` builds the tarball.
+
+```js
+import init, { Index } from "notelight-wasm";
+await init(); // fetches the .wasm in a browser; a no-op in Node
+const index = new Index(manifestBytes, docsBytes, bm25Bytes, vectorsBytes);
+for (const hit of index.search("lock file", queryVector /* or null */, 10)) {
+  const c = index.chunk(hit.id);
+  console.log(`${c.path}:${c.lineStart}`, hit.score);
+}
+```
+
 ## Architecture
 
 ```

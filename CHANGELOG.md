@@ -10,6 +10,18 @@ format is detected and rebuilt by `notelight index`.
 
 ### Added
 
+- **npm package `notelight-wasm`** (built and tested; not yet published).
+  The core as WebAssembly for browsers, bundlers and Node 22+: `Index`
+  (BM25 and hybrid search with a caller-supplied query vector), `chunkText`
+  and `IndexWriter`, with TypeScript declarations. Same build as the browser
+  demo (`wasm-bindgen --target web`), plus a Node entry that loads the
+  `.wasm` from disk; no embedding model. Version single-sourced from
+  Cargo.toml. `scripts/build_npm.py` builds it and checks `npm pack
+  --dry-run`; `scripts/smoke_npm.py` installs the tarball and checks hybrid
+  search against the CLI's top 10 on the sample index and type-checks the
+  declarations, in CI and on 3 OSes x Node 22/24 in the new `npm` workflow,
+  which publishes `npm-vX.Y.Z` tags with trusted publishing and provenance
+  behind an owner-approved `npm` environment.
 - **Indexing in the browser.** The demo page indexes a folder you pick
   (File System Access API, or `<input webkitdirectory>` in Firefox and
   Safari) and keeps the index in the Origin Private File System (IndexedDB

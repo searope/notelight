@@ -32,11 +32,13 @@ crates/notelight-core/   pure Rust engine, no Python/ML/async deps (WASM-portabl
 crates/notelight-py/     thin PyO3 bindings -> python module notelight._core
 crates/notelight-py/src/ lib.rs, errors.rs (core Error -> Python exceptions), chunking.rs, index.rs
 crates/notelight-wasm/   wasm-bindgen bindings (v2): Index over in-memory files, chunkText, IndexWriter; tests/node.rs runs under Node
+                         npm/ (npm README, Node entry node.js, smoke.mjs + smoke-types.ts)
 python/notelight/        Python package: embed.py, ingest.py, documents.py (PDF/DOCX), indexer.py, search.py, paths.py, cli.py, mcp_server.py,
                          download.py, eval/ (datasets, notes benchmark, metrics, NumPy baseline, runner, report)
                          web/ (`notelight serve`: FastAPI over NotesService + static/ page)
 scripts/                 make_demo_gif.py (README demo GIF from a real MCP session),
                          build_wasm.py (-> web-demo/pkg), vendor_ort.py (-> web-demo/vendor),
+                         build_npm.py (-> dist/npm, npm package), smoke_npm.py (installs the tarball, searches),
                          serve_demo.py, make_sample_index.py (+ parity fixture),
                          make_tokenizer_fixture.py, make_indexing_fixture.py, wasi_run.mjs
 web-demo/                static browser app: wasm build, embed.js + tokenizer.js (bge-small via
@@ -103,7 +105,7 @@ C++, x64/x86 build tools, Windows SDK).
 | 4 | MCP server (official Python SDK, stdio): search, read_context, list_sources, index_status; demo GIF | done |
 | 5a | Wheels via maturin-action (smoke-tested per OS), sdist, CHANGELOG, PyPI 0.1.0 | done; **0.1.0 and 0.1.1 published to PyPI 2026-10-16** (tags `v0.1.0`, `v0.1.1`; version lives in Cargo.toml `[workspace.package]`; trusted publishing via the `pypi` environment, which needs the owner's approval per release) |
 | 5b | Localhost web UI, PDF/DOCX extras, phrase ranking, CLI highlighting | done (PRs #5-#8); ships in 0.1.0 |
-| v2 | Same core compiled to wasm32 + browser app | spike done; query embeddings in the browser done; indexing a folder in the browser done (worker, OPFS/IndexedDB, incremental, parity with the CLI); npm package next |
+| v2 | Same core compiled to wasm32 + browser app | spike done; query embeddings in the browser done; indexing a folder in the browser done (worker, OPFS/IndexedDB, incremental, parity with the CLI); npm package `notelight-wasm` built and tested, not yet published (see "Releasing to npm") |
 
 ## Milestone 2 notes (for whoever picks up M3)
 
@@ -202,3 +204,46 @@ C++, x64/x86 build tools, Windows SDK).
   It also runs on `workflow_dispatch` and on PRs touching packaging files.
 - The README is the PyPI long description, so its links must be absolute
   GitHub URLs (in-page `#anchors` are fine). `twine check` the dist files.
+
+## Releasing to npm
+
+- The npm package `notelight-wasm` is the demo's `--target web` build plus
+  `crates/notelight-wasm/npm/` (README, `node.js` Node entry). Its version is
+  the Cargo version; `scripts/build_npm.py` generates package.json and fails
+  if `npm pack --dry-run` lists anything but the nine expected files.
+  Decisions: design notes, "v2: the npm package".
+- `.github/workflows/npm.yml` builds, smoke-tests (3 OSes x Node 22/24) and,
+  on an `npm-vX.Y.Z` tag (not `vX.Y.Z`, which is PyPI), publishes the tested
+  tarball from the `npm` environment via trusted publishing (OIDC, no token).
+- npm cannot attach a trusted publisher to a package that does not exist,
+  so the first version is published by hand. Owner steps, once:
+  1. npmjs.com: create the account, verify the email, and turn on 2FA
+     ("Authorization and writes").
+  2. GitHub: Settings > Environments > New environment `npm`; required
+     reviewer: yourself; deployment branches and tags: tag pattern `npm-v*`.
+  3. With this merged and Cargo's version equal to the PyPI release to pair
+     with, run the workflow on main and publish its tarball:
+     ```powershell
+     gh workflow run npm.yml --ref main
+     $run = gh run list --workflow npm.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId'
+     gh run watch $run --exit-status
+     gh run download $run -n npm-package -D dist\npm-release
+     npm login
+     npm publish (Get-Item dist\npm-release\notelight-wasm-*.tgz).FullName --access public
+     ```
+     (Wait a few seconds after `gh workflow run` so the list shows the new run.)
+     This first version has no provenance; later ones do. Then drop "not
+     yet published" from README.md, CHANGELOG.md and the status table.
+- Every later release:
+  1. At most 2 days before the first tagged release (an unused trusted
+     publisher expires after 2 days), attach it, once:
+     `npm trust github notelight-wasm --repo searope/notelight --file npm.yml --env npm --allow-publish --yes`
+     (npm 11.15+), or on npmjs.com: package > Settings > Trusted publishing >
+     GitHub Actions, user `searope`, repository `notelight`, workflow
+     `npm.yml`, environment `npm`.
+  2. Bump the Cargo version and CHANGELOG as for PyPI, merge, then
+     `git tag -a npm-vX.Y.Z -m "notelight-wasm X.Y.Z"; git push origin npm-vX.Y.Z`
+     and approve the `npm` deployment.
+  3. After the first trusted publish works: package > Settings > Publishing
+     access > "Require two-factor authentication and disallow tokens", and
+     `npm logout`.

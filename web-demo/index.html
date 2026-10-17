@@ -9,6 +9,11 @@
 <script type="module" src="app.js"></script>
 </head>
 <body>
+<div id="activity" class="activity" role="status" aria-live="polite" hidden>
+  <span class="spinner" aria-hidden="true"></span>
+  <span id="activity-text"></span>
+  <progress id="activity-bar" hidden></progress>
+</div>
 <header>
   <h1>notelight <span class="tag">WebAssembly demo</span></h1>
   <p class="lede">

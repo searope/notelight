@@ -8,6 +8,20 @@ format is detected and rebuilt by `notelight index`.
 
 ## [Unreleased]
 
+### Changed
+
+- **The browser app shows what it is doing.** An activity bar pinned to the
+  top of the window, with a spinner and a progress bar when the size is
+  known, covers every slow step: loading the WebAssembly module, the indexer
+  and an index, downloading bge-small (in MiB), checking its SHA-256,
+  starting it, embedding a query that takes over 150 ms, indexing (each
+  stage with counts) and the benchmark. Buttons that start another load or
+  indexing run are disabled meanwhile. After an index is built or opened the
+  page scrolls to the search box, focuses it and says "Search it below". The
+  model now loads in the background: an index can be searched by keywords at
+  once and switches to hybrid when the model is ready, instead of locking the
+  page for the whole first download.
+
 ### Added
 
 - **PDFs in the browser app.** A folder indexed in the page now includes the

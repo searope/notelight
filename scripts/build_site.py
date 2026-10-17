@@ -1,15 +1,16 @@
 """Assemble the browser demo into a folder a static host can serve.
 
     python scripts/build_wasm.py     # web-demo/pkg/
-    python scripts/vendor_ort.py     # web-demo/vendor/
+    python scripts/vendor_ort.py     # web-demo/vendor/onnxruntime-web/
+    python scripts/vendor_pdfjs.py   # web-demo/vendor/pdfjs/
     python scripts/build_site.py     # _site/ (or --out DIR)
 
-The GitHub Pages workflow (.github/workflows/pages.yml) runs the same three
+The GitHub Pages workflow (.github/workflows/pages.yml) runs the same four
 steps and uploads the folder. The site is the page, its scripts, the wasm
-package, the vendored onnxruntime-web and the committed sample index; tests
-and Node-only benchmarks are left out. Nothing in it calls home: the only
-network request the page makes is the one-time model download from Hugging
-Face at the pinned revision, verified by SHA-256 (see web-demo/embed.js).
+package, the vendored onnxruntime-web and pdf.js and the committed sample
+index; tests and Node-only benchmarks are left out. Nothing in it calls home:
+the only network request the page makes is the one-time model download from
+Hugging Face at the pinned revision, verified by SHA-256 (see web-demo/embed.js).
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ INCLUDE = [
     "style.css",
     "embed.js",
     "tokenizer.js",
+    "documents.js",
     "ingest.js",
     "indexer.js",
     "store.js",
@@ -43,7 +45,8 @@ INCLUDE = [
 #: Built or fetched by other scripts; missing ones are an error, not a warning.
 REQUIRED = {
     "pkg": "python scripts/build_wasm.py",
-    "vendor": "python scripts/vendor_ort.py",
+    "vendor/onnxruntime-web": "python scripts/vendor_ort.py",
+    "vendor/pdfjs": "python scripts/vendor_pdfjs.py",
 }
 
 

@@ -3,3 +3,6 @@
 
 # Index fixtures are byte-exact; never touch their line endings.
 web-demo/sample-index/*.bin binary
+
+# Generated PDFs are bytes, whatever git guesses.
+web-demo/tests/fixtures/pdf/*.pdf binary

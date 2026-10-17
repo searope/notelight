@@ -100,15 +100,20 @@ jobs:
       # against the Python embedder's, and a fixture folder indexed in the
       # browser path giving the same chunks, the same docs.bin and bm25.bin,
       # the same document vectors and the same top 10 as `notelight index`.
-      # The runtime is vendored from npm and the model downloaded from the
+      # PDF extraction with the vendored pdf.js on generated fixture PDFs
+      # (page joining, line-to-page mapping, encrypted, image-only and broken
+      # files) and a mixed Markdown + PDF folder indexed and searched.
+      # The runtime and pdf.js are vendored from npm and the model downloaded from the
       # Hub, both verified; the model cache shares its key and path with the
       # model-check workflow.
       - uses: actions/cache@v6
         with:
           path: web-demo/vendor
-          key: onnxruntime-web-${{ hashFiles('scripts/vendor_ort.py') }}
+          key: vendor-${{ hashFiles('scripts/vendor_ort.py', 'scripts/vendor_pdfjs.py') }}
       - name: Vendor onnxruntime-web (pinned, verified)
         run: python3 scripts/vendor_ort.py
+      - name: Vendor pdf.js (pinned, verified)
+        run: python3 scripts/vendor_pdfjs.py
       - uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/notelight-models

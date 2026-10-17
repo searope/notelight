@@ -1,7 +1,7 @@
 name: Pages
 
 # Publishes the browser demo (web-demo/) to GitHub Pages: the Rust core as
-# WebAssembly, the vendored onnxruntime-web, and the committed sample index of
+# WebAssembly, the vendored onnxruntime-web and pdf.js, and the committed sample index of
 # this repository's docs. The page downloads bge-small from Hugging Face on its
 # first hybrid search, verified by SHA-256; nothing else leaves the browser.
 #
@@ -16,6 +16,7 @@ on:
       - "scripts/build_wasm.py"
       - "scripts/build_site.py"
       - "scripts/vendor_ort.py"
+      - "scripts/vendor_pdfjs.py"
       - "Cargo.lock"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
@@ -50,9 +51,11 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: web-demo/vendor
-          key: onnxruntime-web-${{ hashFiles('scripts/vendor_ort.py') }}
+          key: vendor-${{ hashFiles('scripts/vendor_ort.py', 'scripts/vendor_pdfjs.py') }}
       - name: Vendor onnxruntime-web (pinned, verified)
         run: python3 scripts/vendor_ort.py
+      - name: Vendor pdf.js (pinned, verified)
+        run: python3 scripts/vendor_pdfjs.py
       - name: Assemble the site
         run: python3 scripts/build_site.py --out _site
       - uses: actions/upload-pages-artifact@v4

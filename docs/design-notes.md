@@ -922,8 +922,9 @@ Node test requires the same verdicts. Even Python's quirks are kept: a
 UTF-8 BOM at the start of `.notelightignore` stays part of the first
 pattern, as `read_text(encoding="utf-8")` leaves it.
 
-PDF and DOCX are found by the walk but skipped with a note that says to use
-the CLI; text extraction in JavaScript (pdf.js) is a separate decision.
+PDF and DOCX are found by the walk. PDFs are now read with pdf.js (see
+"v2: PDFs in the browser"); DOCX is skipped with a note that says to use the
+CLI.
 
 ### Incremental, with Python's caches in a browser's shape
 
@@ -1043,11 +1044,158 @@ Python's, and the same hybrid and BM25 top 10 for all 10 queries.
 - **Faster embedding.** WebGPU, or a smaller model, would be the lever; the
   vectors would then need the same parity test against the CLI.
 - **PDF and DOCX** with JavaScript extractors that match the CLI's text, or
-  a clear statement that they differ.
+  a clear statement that they differ. PDF is done, with pdf.js, and its text
+  differs (see "v2: PDFs in the browser"); DOCX is still to do.
 - **Memory.** The writer holds every chunk in WebAssembly memory before
   `build`; very large folders would want a streaming writer.
 - **npm.** Publish `notelight-wasm` with `chunkText`, `IndexWriter` and
   `Index`: packaged, see "v2: the npm package".
+
+## v2: PDFs in the browser
+
+A folder indexed in the page now includes its PDFs, with the CLI's citation
+contract: the text of each page ends in a newline, pages are joined with a
+form feed, chunks cite `path:line_start-line_end` of that text, and results
+show the pages those lines are on (`p. 3`, `pp. 3-4`). The pieces are
+`web-demo/documents.js` (the counterpart of `documents.py`), a few lines in
+`indexer.js` and the worker, and `scripts/vendor_pdfjs.py`.
+
+### pdf.js, vendored and pinned
+
+pdf.js (Mozilla, Apache-2.0) is the PDF reader Firefox's viewer is built on,
+and the only mature one in plain JavaScript; the alternatives were compiling
+a native library to WebAssembly (MuPDF is AGPL, as for the CLI; PDFium is
+large and needs its own toolchain) or porting pypdf. `scripts/vendor_pdfjs.py`
+pins `pdfjs-dist` 6.3.289 as `vendor_ort.py` pins onnxruntime-web: the npm
+tarball is checked against npm's SHA-512 integrity, the two scripts against
+their own SHA-256, and the 169 CMap files (character maps for CJK fonts)
+against one SHA-256 over their names and hashes. Nothing comes from a CDN.
+It ships the legacy build: the modern one calls
+`Map.prototype.getOrInsertComputed`, which Node 24 and browsers a year or
+two old do not have, and the legacy build is only 0.1 MiB larger. Standard
+font data and the image decoders (`standard_fonts/`, `wasm/`) are left out:
+they draw pages and decode images, and only text is read.
+
+| What a folder with PDFs adds | Raw | gzipped |
+|---|---|---|
+| `pdf.min.mjs` + `pdf.worker.min.mjs` (loaded on the first PDF) | 1.75 MiB | 529 KiB |
+| `cmaps/` (one file at a time, only for PDFs that use a predefined CMap) | 1.11 MiB in 169 files | 0.84 MiB |
+| `documents.js` (always) | 9 KiB | 4 KiB |
+
+A folder without PDFs loads none of it: the extractor (`lazyPdfExtractor`)
+imports pdf.js on its first PDF. Loading it took 0.6 s on a fresh profile
+from `serve_demo.py` and 0.14 to 0.2 s when the browser had it cached; the
+worker reports it on its own (`stats.ms.pdfjs`), like the model.
+
+### pdf.js runs in the indexing worker, without a worker of its own
+
+pdf.js normally parses in a Web Worker of its own. The indexing worker is
+already off the main thread, so it imports `pdf.worker.min.mjs` first, and
+pdf.js finds `globalThis.pdfjsWorker` and runs the parser in the same thread
+(its "fake worker"). That avoids a nested worker, a second script URL for
+the page's COOP/COEP service worker to cover, and copying each file to
+another thread. pdf.js's own loader for CMap files resolves URLs against
+`document.baseURI`, which a worker does not have, so `documents.js` passes
+a `BinaryDataFactory` that fetches `vendor/pdfjs/cmaps/<name>` (only names
+made of word characters, dots and dashes). Fonts are not installed
+(`disableFontFace`), glyph programs are not compiled with `eval`
+(`isEvalSupported: false`) and XFA forms are off. Verified in headless
+Chrome 155 against the built site served without isolation headers, so
+through `coi-sw.js` as on GitHub Pages: the page was cross-origin isolated,
+indexing read the PDFs, and the console showed no errors.
+
+### The same contract as the CLI, not the same text
+
+The text of each page is pdf.js's text runs in order with a newline where
+pdf.js marks the end of a line (`hasEOL`); then exactly what `documents.py`
+does: NUL, form feed and CR removed, a vertical tab made a newline, trailing
+newlines stripped, one newline added, pages joined with `\f`. A page with no
+text is a line of its own, so a line belongs to exactly one page. Page
+numbers are the page's position in the file (1-based), not its printed
+label, as in the CLI.
+
+The page starts are stored per file in `meta.json` (`files[].pages`), the
+browser's counterpart of the CLI's `pages` table, and the page computes
+`pageRange` from them and a hit's lines. An index opened from a CLI index
+folder has no page table in the page, so its PDF hits show lines only.
+
+pdf.js and pypdf decide differently where a line ends, where spaces go and
+in which order text runs come, so the extracted text is not byte-identical
+and a PDF's chunks and line numbers in a browser index are not the CLI's.
+That is accepted: each index cites its own text consistently, and an index
+built in the browser is only read in the browser. On the generated test PDFs
+the two agree exactly. On three real documents (below) both give the same
+pages, and comparing word sequences page by page gives a similarity of 1.000
+on average (lowest page 0.974); the differences are mostly whitespace:
+pypdf keeps trailing spaces and lines that hold only a space, pdf.js does
+not. With whitespace collapsed and blank lines dropped, 99.0% (NIST SP
+800-63B), 99.2% (SP 800-53r5) and 99.96% (a novel printed by Chrome) of
+pypdf's distinct lines appear in pdf.js's text, and the line counts differ
+by 0.05 to 4%.
+
+Skips follow the CLI, with the same reasons: pdf.js tries the empty user
+password itself, so a PDF encrypted only to restrict printing or copying is
+read, and one that needs a password is skipped as `encrypted PDF (password
+required)`; a PDF with no text on any page is `PDF has no text layer
+(scanned or image-only?)`; anything pdf.js fails to parse is `unreadable
+PDF: <error>`, and extraction never throws. The 50 MiB limit is the walk's,
+as before.
+
+### Cache keys
+
+How a file becomes text is now part of the per-file cache in `meta.json`
+(`mode`: `md`, `txt`, or the PDF extractor's id, `pdf1:pdfjs-6.3.289`), as
+`content_mode` is part of the CLI's `doc_key`. A file is reused only when its
+mode is unchanged, so a new pdf.js re-extracts every PDF (counted as
+changed), and a PDF skipped before PDFs were read here is read on the next
+update. Indexes written before this change have no `mode`; their files were
+all text, so their mode is derived from the suffix and nothing is re-read.
+`meta.json` keeps its version: the new fields are optional.
+
+### Tests
+
+`scripts/make_pdf_fixtures.py` writes seven small PDFs object by object, so
+their text is known exactly (18 KiB in all, committed), and records what
+pypdf makes of them. `web-demo/tests/documents.test.mjs`, in CI's wasm job,
+checks with the vendored pdf.js: the text and page count of a four-page PDF
+with a blank page, of a five-page one and of the empty-password encrypted
+copy; that every line of the five-page one maps to the page it was drawn
+on; Japanese text in a non-embedded CID font, read through the two CMap
+files it needs and no others; the skip reasons for a password-protected,
+an image-only, a broken, an empty and a non-PDF file; and that the vendored
+pdf.js is the version the extractor id names. Then a folder of a Markdown
+note, two readable PDFs, three unreadable ones and a DOCX is indexed through
+`indexer.js` with the wasm core and searched: the skip reasons, the page
+starts in `meta.json`, every chunk citing lines of the extracted text,
+search hits on the right pages (checked against a second count of form
+feeds), no PDF re-read on an unchanged update or a touched file, every PDF
+re-read under a new extractor id, and PDFs skipped by an older index read
+on the next update.
+
+### Measured
+
+Extraction in headless Chrome 155 on an i9-10900K (Windows 11), driven over
+the DevTools protocol through the page's `<input webkitdirectory>`, with the
+built site served by `serve_demo.py` without isolation headers, keyword-only,
+each run a fresh index of a folder holding one PDF. The time is
+`stats.ms.extract`: pdf.js parsing and extracting text in the worker, on one
+thread, without loading pdf.js. Two unrelated jobs kept the machine's cores
+busy during most runs, so the ranges are wide; each row covers all 8 runs.
+
+| Document | Pages | Size | Extraction | Pages/s | MiB/s | pypdf, native (best of 3) |
+|---|---|---|---|---|---|---|
+| NIST SP 800-63B (2017, Adobe PDF Library) | 80 | 1.41 MiB | 0.72 to 0.90 s | 89 to 112 | 1.6 to 2.0 | 3.8 s: 21 pages/s |
+| NIST SP 800-53 Rev. 5 (2020, Adobe PDF Library) | 492 | 5.79 MiB | 3.8 to 9.5 s | 52 to 130 | 0.6 to 1.5 | 26.9 s: 18 pages/s |
+| *Pride and Prejudice*, Project Gutenberg HTML printed by Chrome (Skia) | 192 | 2.26 MiB | 1.14 to 1.99 s | 96 to 168 | 1.1 to 2.0 | 16.4 s: 12 pages/s |
+
+The three in one folder: 764 pages, 9.46 MiB, extracted in 5.5 s (138
+pages/s, 1.7 MiB/s), 2,152 chunks indexed in 5.9 s in all. The NIST
+publications are works of the US government and the novel is in the public
+domain; they were downloaded for the measurement and are not in the
+repository. Extraction is cheap next to embedding: at about 8 chunks/s with
+bge-small, the 171 chunks of SP 800-63B take about 20 s to embed and under
+a second to extract. pypdf, the CLI's reader, took 5 to 10 times as long on
+the same files and the same busy machine (pure Python, natively).
 
 ## v2: the npm package
 

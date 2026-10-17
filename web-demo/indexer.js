@@ -6,7 +6,11 @@
 //    generation. Otherwise it is read and hashed (SHA-256); if the hash
 //    matches, its chunks are reused too.
 // 2. Decode and chunk new and changed files with the Rust core (`chunkText`,
-//    1200 characters, Markdown structure for .md and .markdown).
+//    1200 characters, Markdown structure for .md and .markdown). PDFs are
+//    first turned into text by pdf.js (documents.js), and the line each page
+//    starts on is kept with the file, as the CLI's `pages` table keeps it.
+//    How a file becomes text (`contentMode`: md, txt or the PDF extractor's
+//    id) is part of the cache key, so a new pdf.js re-extracts every PDF.
 // 3. Embed only chunks whose text is not in the embedding cache, keyed by
 //    sha256(model_id + "\n" + embedded text) as in Python, so unchanged,
 //    renamed and copied notes are never embedded twice. The embedded text is
@@ -16,22 +20,23 @@
 //    older generation. If nothing changed, nothing is written.
 //
 // Storage layout (store.js), per index:
-//   indexes/<id>/meta.json        name, live generation, per-file cache, last stats
+//   indexes/<id>/meta.json        name, live generation, per-file cache (with
+//                                 page starts for PDFs), last stats
 //   indexes/<id>/gen-NNNNNN/      manifest.json, docs.bin, bm25.bin, vectors.bin
 //   indexes/<id>/embeddings.bin   the embedding cache (format below)
 //
 // The module takes the wasm module, the store and the embedder as arguments,
 // so it runs unchanged in the indexing worker and in the Node parity test.
 
-import { DOCUMENT_SUFFIXES, decode, isMarkdown, walk } from "./ingest.js";
+import { contentMode, DOCX_SKIP_REASON, pageStarts } from "./documents.js";
+import { decode, isMarkdown, suffixOf, walk } from "./ingest.js";
 
 export const DEFAULT_MAX_CHARS = 1200;
 /** Missing embeddings are computed this many at a time, as `indexer.EMBED_BATCH`. */
 export const EMBED_BATCH = 64;
 export const META_FORMAT = "notelight-browser-index";
 export const META_VERSION = 1;
-export const DOCUMENT_SKIP_REASON =
-  "PDF and DOCX are not read in the browser yet; index the folder with the notelight CLI to include them";
+export const PDF_UNAVAILABLE_REASON = "PDF text extraction is not available here";
 
 const encoder = new TextEncoder();
 const GEN = /^gen-(\d{6})$/;
@@ -53,6 +58,12 @@ export function embeddingText(headingPath, text) {
 
 /** The embedding cache key (`indexer._embedding_key`). */
 export const embeddingKey = (modelId, text) => sha256Hex(encoder.encode(`${modelId}\n${text}`));
+
+/**
+ * How a cached file was turned into text (`documents.contentMode`). Indexes
+ * written before PDFs were read here held only text files and no `mode`.
+ */
+const modeOf = (file) => file.mode ?? contentMode(suffixOf(file.path));
 
 /** Thrown when indexing is cancelled; the embeddings finished so far are kept. */
 export class CancelledError extends Error {
@@ -197,6 +208,9 @@ const now = () => performance.now();
  * @param {string} [o.name]  display name, recorded as the manifest's `source`
  * @param {object|null} o.embedder  {modelId, dim, embedDocuments(texts, {onBatch})} or null
  *   for keyword-only; `onBatch(done)` reports progress within a call and may throw to stop
+ * @param {object|null} [o.pdf]  {id, extract(bytes)} turns a PDF into
+ *   {text, skipReason, pages} (documents.js `lazyPdfExtractor`); `id` is part
+ *   of the cache key (`PDF_EXTRACTOR_ID`). Without it, PDFs are skipped
  * @param {number} [o.maxChars]
  * @param {Function} [o.onProgress]  called with {stage, done, total}
  * @param {AbortSignal} [o.signal]  cancels between files and between embedding batches
@@ -210,6 +224,7 @@ export async function syncFolder({
   id,
   name = root.name,
   embedder,
+  pdf = null,
   maxChars = DEFAULT_MAX_CHARS,
   onProgress = () => {},
   signal,
@@ -230,6 +245,9 @@ export async function syncFolder({
     chunks: 0,
     embedded: 0,
     reusedFiles: 0,
+    pdfs: 0,
+    pdfPages: 0,
+    pdfBytes: 0,
     bytesRead: 0,
     bytesIndexed: 0,
     generation: null,
@@ -271,32 +289,42 @@ export async function syncFolder({
   };
   const canReuse = sameChunker && prev.current !== null;
 
-  const docs = []; // {path, size, lastModified, sha256, chunks}
+  const docs = []; // {path, size, lastModified, sha256, mode, pages?, chunks}
   const skipped = [];
-  const skip = (f, reason) => {
-    skipped.push({ path: f.path, size: f.size, lastModified: f.lastModified, reason });
+  const skip = (f, mode, reason) => {
+    skipped.push({ path: f.path, size: f.size, lastModified: f.lastModified, mode, reason });
     stats.skipped.push({ path: f.path, reason });
   };
   let readMs = 0;
   let chunkMs = 0;
+  let extractMs = 0;
   for (const [i, f] of files.entries()) {
-    if (i % 16 === 0) {
-      checkCancel();
-      onProgress({ stage: "read", done: i, total: files.length });
-    }
+    const isPdf = f.suffix === ".pdf";
+    checkCancel();
+    if (i % 16 === 0 || isPdf) onProgress({ stage: "read", done: i, total: files.length });
+    // A PDF's mode is its extractor's id; with no extractor it is skipped.
+    const mode = isPdf ? (pdf?.id ?? null) : contentMode(f.suffix);
     const prior = known.get(f.path);
-    if (canReuse && prior && prior.size === f.size && prior.lastModified === f.lastModified) {
-      docs.push({ ...prior, chunks: (await previousChunks()).get(f.path) ?? [] });
+    const sameMode = prior && modeOf(prior) === mode;
+    if (canReuse && sameMode && prior.size === f.size && prior.lastModified === f.lastModified) {
+      docs.push({ ...prior, mode, chunks: (await previousChunks()).get(f.path) ?? [] });
       stats.reusedFiles++;
       continue;
     }
+    // A file rejected before stays rejected until it changes, unless it is
+    // now read differently (a PDF skipped before PDFs were read here).
     const priorSkip = knownSkipped.get(f.path);
-    if (priorSkip && priorSkip.size === f.size && priorSkip.lastModified === f.lastModified) {
-      skip(f, priorSkip.reason); // unchanged since it was last rejected
+    if (
+      priorSkip &&
+      (priorSkip.mode ?? null) === mode &&
+      priorSkip.size === f.size &&
+      priorSkip.lastModified === f.lastModified
+    ) {
+      skip(f, mode, priorSkip.reason);
       continue;
     }
-    if (DOCUMENT_SUFFIXES.has(f.suffix)) {
-      skip(f, DOCUMENT_SKIP_REASON);
+    if (mode === null) {
+      skip(f, mode, isPdf ? PDF_UNAVAILABLE_REASON : DOCX_SKIP_REASON);
       continue;
     }
     let t = now();
@@ -304,31 +332,42 @@ export async function syncFolder({
     try {
       bytes = await f.read();
     } catch (e) {
-      skip(f, `unreadable: ${e.message ?? e}`);
+      skip(f, mode, `unreadable: ${e.message ?? e}`);
       continue;
     }
     stats.bytesRead += bytes.length;
     const sha256 = await sha256Hex(bytes);
     readMs += now() - t;
-    const entry = { path: f.path, size: f.size, lastModified: f.lastModified, sha256 };
-    if (canReuse && prior && prior.sha256 === sha256) {
+    const entry = { path: f.path, size: f.size, lastModified: f.lastModified, sha256, mode };
+    if (canReuse && sameMode && prior.sha256 === sha256) {
       // Touched but identical: no need to decode or chunk again.
-      docs.push({ ...entry, chunks: (await previousChunks()).get(f.path) ?? [] });
+      const pages = prior.pages ? { pages: prior.pages } : {};
+      docs.push({ ...entry, ...pages, chunks: (await previousChunks()).get(f.path) ?? [] });
       stats.reusedFiles++;
       continue;
     }
     t = now();
-    const decoded = decode(bytes);
+    let decoded;
+    if (isPdf) {
+      decoded = await pdf.extract(bytes); // may detach `bytes`
+      extractMs += now() - t;
+      stats.pdfs++;
+      stats.pdfBytes += f.size;
+      stats.pdfPages += decoded.pages ?? 0;
+      t = now();
+    } else {
+      decoded = decode(bytes);
+    }
     if (decoded.text === null) {
       chunkMs += now() - t;
-      skip(f, decoded.skipReason);
+      skip(f, mode, decoded.skipReason);
       continue;
     }
     if (!prior) stats.added++;
-    else if (prior.sha256 !== sha256) stats.changed++;
+    else if (!sameMode || prior.sha256 !== sha256) stats.changed++;
     const chunks = wasm.chunkText(decoded.text, maxChars, isMarkdown(f.path));
     chunkMs += now() - t;
-    docs.push({ ...entry, chunks });
+    docs.push({ ...entry, ...(isPdf ? { pages: pageStarts(decoded.text) } : {}), chunks });
   }
   const seen = new Set(docs.map((d) => d.path));
   stats.removed = [...known.keys()].filter((p) => !seen.has(p)).length;
@@ -337,6 +376,7 @@ export async function syncFolder({
   stats.bytesIndexed = docs.reduce((n, d) => n + d.size, 0);
   stats.ms.read = readMs;
   stats.ms.chunk = chunkMs;
+  stats.ms.extract = extractMs;
   onProgress({ stage: "read", done: files.length, total: files.length });
 
   const metaOf = (current) => ({
@@ -351,7 +391,9 @@ export async function syncFolder({
     dim,
     chunker,
     store: store.kind,
-    files: docs.map(({ path, size, lastModified, sha256 }) => ({ path, size, lastModified, sha256 })),
+    files: docs.map(({ path, size, lastModified, sha256, mode, pages }) =>
+      pages ? { path, size, lastModified, sha256, mode, pages } : { path, size, lastModified, sha256, mode },
+    ),
     skipped,
     stats,
   });

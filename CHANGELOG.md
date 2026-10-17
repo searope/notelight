@@ -10,6 +10,29 @@ format is detected and rebuilt by `notelight index`.
 
 ### Added
 
+- **Indexing in the browser.** The demo page indexes a folder you pick
+  (File System Access API, or `<input webkitdirectory>` in Firefox and
+  Safari) and keeps the index in the Origin Private File System (IndexedDB
+  where OPFS is missing), so it is listed and reopened on the next visit
+  without re-embedding; each index can be updated or deleted. Files never
+  leave the browser; the only network request is still the verified model
+  download. The walk follows `notelight index` (skip rules,
+  `.notelightignore` with pathspec's gitignore semantics, UTF-8 then
+  Windows-1252; PDF and DOCX are listed as skipped for now), and updates
+  re-chunk only changed files and embed only text the embedding cache
+  (keyed `sha256(model_id + "\n" + text)`, as in Python) does not have.
+  Indexing runs in a Web Worker with progress and Cancel; a cancelled run
+  keeps its finished batches. Keyword-only indexing needs no model. A Node
+  test in CI indexes a fixture folder through the browser path and gets the
+  CLI's chunks, byte-identical `docs.bin` and `bm25.bin`, the same document
+  vectors (1 − cosine ≈ 2·10⁻¹³) and the same top 10. In Chrome on an
+  i9-10900K, this repository's `docs/` (207 chunks) indexes in 41 ms
+  without the model and in 27 s with bge-small on 8 threads (about 8
+  chunks/s; the native CLI does 14); an update with nothing changed takes
+  8 ms.
+- `notelight-wasm` exports `chunkText` and `IndexWriter`, which builds a
+  generation in memory with the core's writer.
+
 - **Query embeddings in the browser demo.** `web-demo/` embeds the query with
   bge-small through onnxruntime-web (vendored at a pinned version, no CDN) and
   runs hybrid search against an index the CLI built with its default embedder.

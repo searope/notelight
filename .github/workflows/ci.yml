@@ -87,11 +87,14 @@ jobs:
         run: cargo test -p notelight-wasm --test node --target wasm32-unknown-unknown
       - name: Build the demo package and report its size
         run: python3 scripts/build_wasm.py
-      # The browser embedder: tokenizer parity with HF tokenizers, the
-      # SHA-256 checks, and query vectors and top-10 hits against the Python
-      # embedder's (web-demo/tests). The runtime is vendored from npm and the
-      # model downloaded from the Hub, both verified; the model cache shares
-      # its key and path with the model-check workflow.
+      # The browser embedder and indexer (web-demo/tests): tokenizer parity
+      # with HF tokenizers, the SHA-256 checks, query vectors and top-10 hits
+      # against the Python embedder's, and a fixture folder indexed in the
+      # browser path giving the same chunks, the same docs.bin and bm25.bin,
+      # the same document vectors and the same top 10 as `notelight index`.
+      # The runtime is vendored from npm and the model downloaded from the
+      # Hub, both verified; the model cache shares its key and path with the
+      # model-check workflow.
       - uses: actions/cache@v6
         with:
           path: web-demo/vendor
@@ -102,7 +105,7 @@ jobs:
         with:
           path: ${{ runner.temp }}/notelight-models
           key: bge-small-5c38ec7c405ec4b44b94cc5a9bb96e735b38267a
-      - name: Browser embedder under Node (parity with Python)
+      - name: Browser embedder and indexer under Node (parity with Python)
         env:
           NOTELIGHT_MODEL_CACHE: ${{ runner.temp }}/notelight-models
           NOTELIGHT_MODEL_DOWNLOAD: "1"

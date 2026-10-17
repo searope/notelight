@@ -2,9 +2,9 @@
 // the wasm package live, and how to skip (locally) or fail (in CI) when one is
 // missing.
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { BGE_SMALL_EN_V15 as SPEC, fileUrl, loadVerified } from "../embed.js";
@@ -92,4 +92,39 @@ export function cosine(a, b) {
     nb += b[i] * b[i];
   }
   return dot / Math.sqrt(na * nb);
+}
+
+/**
+ * A folder on disk as an ingest.js folder tree, the way the browser sees a
+ * FileSystemDirectoryHandle: names, kinds, and files with size and mtime.
+ */
+export function fromDisk(dir, name = basename(dir)) {
+  return {
+    kind: "directory",
+    name,
+    async *entries() {
+      for (const e of await readdir(dir, { withFileTypes: true })) {
+        const path = join(dir, e.name);
+        if (e.isDirectory()) {
+          yield fromDisk(path, e.name);
+        } else if (e.isFile()) {
+          yield {
+            kind: "file",
+            name: e.name,
+            async file() {
+              const st = await stat(path);
+              return {
+                size: st.size,
+                lastModified: Math.floor(st.mtimeMs),
+                arrayBuffer: async () => {
+                  const b = await readFile(path);
+                  return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+                },
+              };
+            },
+          };
+        }
+      }
+    },
+  };
 }

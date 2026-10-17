@@ -682,23 +682,19 @@ once per page load.
 
 - **Query embeddings in the browser.** Done: see "v2: query embeddings in
   the browser" below.
-- **Indexing in the browser.** `chunk_text`, `IndexWriter::build` and the
-  embedder are enough to build a generation from files the user picks
-  (File System Access API where available, `<input webkitdirectory>`
-  elsewhere). PDF and DOCX need JS-side text extraction (pdf.js) or are left
-  out at first.
-- **Storage.** Keep generations in OPFS (or IndexedDB), with the same
-  immutable-generation idea: write a new one, then switch a pointer. An
-  incremental rebuild needs the per-file cache the Python indexer keeps in
-  SQLite, as a small JSON or IndexedDB table.
-- **A worker.** Opening 100 MiB and embedding block the main thread; run the
-  core and the model in a Web Worker and pass results by `postMessage`.
+- **Indexing in the browser.** Done, except PDF and DOCX: see "v2:
+  indexing in the browser" below.
+- **Storage.** Done: generations in OPFS (or IndexedDB), switched by a
+  pointer file, with the per-file and embedding caches beside them.
+- **A worker.** Done for indexing, embedding documents and storage.
+  Opening a large index and embedding queries still run on the main
+  thread.
 - **Memory.** wasm32 linear memory is limited to 4 GiB and only grows. Large
   indexes may want docs.bin kept outside WebAssembly memory (in JS, fetched per
   hit), which needs a `Docs` that reads through a callback.
-- **The TypeScript app itself**, with the types `wasm-bindgen` generates
-  (`notelight_wasm.d.ts`), and a deploy (GitHub Pages) built in CI by
-  `scripts/build_wasm.py`.
+- **The app itself.** The page stays plain JavaScript with no build step
+  beyond `wasm-bindgen`; the generated `notelight_wasm.d.ts` documents the
+  API for an npm package. The GitHub Pages deploy is done.
 
 ## v2: query embeddings in the browser
 
@@ -879,3 +875,176 @@ is then isolated, the model downloads from the Hub, and the embedder runs on
 28 ms with `?threads=1`. The Claude desktop app's browser pane, where the
 other numbers above were measured, does not run service workers, so there
 `--isolated` is still the way to get threads.
+
+## v2: indexing in the browser
+
+The demo now indexes a folder the user picks, in the page, and keeps the
+index across reloads. A folder indexed here and the same folder indexed by
+`notelight index` give the same chunks, byte-identical `docs.bin` and
+`bm25.bin`, document vectors equal to rounding, and the same top 10. The
+pieces are `chunkText` and `IndexWriter` in `crates/notelight-wasm`,
+`web-demo/ingest.js` (the walk), `web-demo/indexer.js` (incremental sync),
+`web-demo/store.js` (OPFS or IndexedDB), and `web-demo/index-worker.js`.
+
+### The core writes the index; JavaScript only walks and caches
+
+`notelight-wasm` gained two thin bindings: `chunkText(text, maxChars,
+markdown)` over `chunk::chunk_text`, and an `IndexWriter` class over the
+core's writer whose `build(generation)` returns the four files' bytes
+(`IndexWriter::build`, added in the spike). Nothing in the core changed and
+the on-disk format is the same: a generation built in the browser is
+byte-for-byte what `commit` writes (a Node test rebuilds the committed
+sample from its own chunks and gets the same `docs.bin` and `bm25.bin`).
+The `.wasm` grew from 245 KiB to 322 KiB (128 KiB gzipped) because the BM25
+builder, the chunker and `serde_json` now ship to the browser.
+
+### The same files, in the same order
+
+Chunk ids follow the walk order, and BM25 breaks ties by id, so "the same
+top 10" needs the same files in the same order, not only the same text.
+`ingest.js` follows `ingest.py` line by line: hidden names and `SKIP_DIRS`
+pruned, files sorted by code point (Python's string order, not JavaScript's
+UTF-16 order), `Path.suffix` semantics, the 10 MiB and 50 MiB limits, a NUL
+in the first 8 KiB means binary, then UTF-8 (BOM dropped) and Windows-1252.
+WHATWG's `windows-1252` decoder maps the five bytes Python's `cp1252`
+rejects (0x81, 0x8D, 0x8F, 0x90, 0x9D) to control characters, so those
+bytes are checked first and the file is skipped with Python's reason.
+
+`.notelightignore` needed the most care. "gitignore syntax" is not one
+thing: Git, the `ignore` npm package and pathspec disagree at the edges
+(re-including a file under an excluded directory, `**/` alone, invalid
+ranges). The walk must agree with the CLI, so `ingest.js` ports pathspec
+1.1's `GitIgnoreSpecPattern` and its matching order (patterns scanned from
+the last, a match through a directory marker ranking below a direct one)
+instead of using a library. `scripts/make_indexing_fixture.py` records
+pathspec's verdict on 51 paths against two sets of tricky patterns, and the
+Node test requires the same verdicts. Even Python's quirks are kept: a
+UTF-8 BOM at the start of `.notelightignore` stays part of the first
+pattern, as `read_text(encoding="utf-8")` leaves it.
+
+PDF and DOCX are found by the walk but skipped with a note that says to use
+the CLI; text extraction in JavaScript (pdf.js) is a separate decision.
+
+### Incremental, with Python's caches in a browser's shape
+
+| Python (`cache.sqlite`) | Browser (per index) |
+|---|---|
+| `files`: path → size, mtime, content key | `meta.json`, `files`: path, size, `lastModified`, SHA-256 |
+| `chunks`: content key → chunks | the live generation itself: unchanged files take their chunks from it |
+| `embeddings`: `sha256(model_id + "\n" + text)` → vector | `embeddings.bin`, same keys (format below) |
+| `skipped`: path → size, mtime, reason | `meta.json`, `skipped` |
+
+A file whose size and modification time match is not read. One that was
+touched but hashes the same is not re-chunked. Only texts missing from the
+embedding cache are embedded, in Python's order (missing keys sorted, 64 per
+call, sorted by length into batches of 32), so a renamed or copied note costs
+nothing and an edited one re-embeds only the sections that changed. After a
+successful sync the cache keeps only the vectors the live generation uses; a
+keyword-only sync leaves it alone. A sync with nothing to embed never loads
+the model, as `OnnxEmbedder` loads lazily. If nothing changed, nothing is
+written. The Node test checks each of these with a counting fake embedder.
+
+`embeddings.bin` is `NLEMB001`, then dim, count and model id length (u32
+little-endian), the model id, padding to 4 bytes, then per vector a 32-byte
+SHA-256 key and `dim` float32s, read with `DataView` at checked offsets. A
+cache for another model or dimension, or one whose length does not add up,
+is ignored rather than trusted: it can always be rebuilt.
+
+### Storage: OPFS, IndexedDB as the fallback
+
+`store.js` is four calls (`read`, `write`, `list`, `remove`) over the Origin
+Private File System, with an IndexedDB store of path → bytes where OPFS is
+missing or cannot write (the worker writes, reads back and removes a probe
+file to decide). An index is `indexes/<id>/meta.json`, one
+`gen-NNNNNN/` folder and `embeddings.bin`. As on disk, generations are
+immutable: a sync writes the new generation, then `embeddings.bin`, then
+`meta.json`, which is the pointer, and only then deletes the old
+generation. A sync interrupted before `meta.json` leaves the old index
+live; its leftovers are removed by the next sync. `navigator.locks` plays
+the writer lock's part, so two tabs cannot update one index at once. The
+page asks for persistent storage (`navigator.storage.persist()`), and says
+when the browser may still evict it.
+
+With the File System Access API the folder handle is kept in IndexedDB, so
+**Update** re-reads the folder after one permission prompt; elsewhere the
+user picks it again.
+
+### A worker
+
+Everything that touches files and storage runs in `index-worker.js`: the
+walk, hashing, chunking, embedding (its own onnxruntime-web session, loaded
+only when needed and released after the sync), building and storing. The page
+sends requests and receives progress messages and the result, with the
+generation's bytes transferred rather than copied. **Cancel** is checked
+between batches of 32 chunks; finished batches are saved first, so the next
+sync resumes where the cancelled one stopped. Searching stays on the main
+thread: it takes microseconds to milliseconds.
+
+### Privacy
+
+The promise is that files never leave the browser, and the code keeps it
+simple to check: files are read only in the worker, nothing is sent with
+them, the only cross-origin request is the pinned model download
+(`embed.js`, verified by SHA-256), and storage is private to the origin.
+The page says so above the folder button.
+
+### Measured
+
+This repository's `docs/` (11 files, 141 KiB, 207 chunks), on an i9-10900K
+(10 cores, Windows 11), in headless Chrome 155 driven over the DevTools
+protocol through the page's `<input webkitdirectory>`, with
+`serve_demo.py --isolated`. Each run indexes from an empty store; the time
+is from the walk to the stored generation, without loading the model.
+Native is `notelight.indexer.sync` on the same folder in a fresh
+`NOTELIGHT_HOME`, with onnxruntime 1.31.
+
+| Fresh index of docs/ | Browser | Native (Python) |
+|---|---|---|
+| Keywords only | 41 to 48 ms: 4,300 to 5,100 chunks/s, 2.9 to 3.4 MiB/s | 0.27 to 0.38 s: 550 to 760 chunks/s |
+| bge-small, 1 thread | 149 s: 1.4 chunks/s | 43.4 to 43.7 s: 4.7 chunks/s |
+| bge-small, 4 threads | 41.9 s: 4.9 chunks/s | 16.3 s: 12.7 chunks/s |
+| bge-small, 8 threads (the page's default) | 26.7 to 27.4 s: 7.6 to 7.8 chunks/s, 5 KiB/s | |
+| bge-small, 10 threads | 27.9 s: 7.4 chunks/s | |
+| bge-small, onnxruntime's default threads | | 14.3 to 14.7 s: 14.1 to 14.5 chunks/s |
+| Update, nothing changed | 7.6 to 8.5 ms, the model not loaded | |
+
+Without the model, indexing is quick: of the best keyword run's 41 ms, the
+walk took 0.7 ms, reading and hashing 5.4 ms, decoding and chunking 3.2 ms,
+building the generation 13 ms and writing it to OPFS 18 ms. The Python
+figure covers the same steps plus its SQLite cache writes.
+
+With the model, embedding is over 99% of the time, and WebAssembly is about
+3x slower than native per thread, as for queries (128-bit SIMD against
+native's wider x86 kernels). Four threads in the browser match one native
+thread; eight are 1.5x faster than four, and ten add nothing, so indexing
+uses up to 8 (`?index-threads=N` overrides it) while queries keep 4. At
+about 8 chunks/s, a first index of a 10 MiB notes folder (roughly 15,000
+chunks) would take about half an hour; after that, updates embed only what
+changed. Keyword-only indexing is offered for exactly this reason.
+
+Loading the model in the worker took 3.1 to 4.3 s per run here because
+headless Chrome could not open the Cache API in its profile, so every run
+downloaded it again (the page now carries on without a cache instead of
+failing). In the desktop app's Chromium the worker reads it from the cache in
+0.5 to 0.8 s, as the page does for queries.
+
+Correctness is measured in CI, not here: the fixture folder indexed by the
+browser path under Node gives the same 23 chunks as the CLI, byte-identical
+`docs.bin` and `bm25.bin`, document vectors within 1 − cosine = 2.4·10⁻¹³ of
+Python's, and the same hybrid and BM25 top 10 for all 10 queries.
+
+| What the page loads | Raw | gzipped |
+|---|---|---|
+| notelight-wasm (`.wasm` + glue), now with the writer and chunker | 349 KiB | 134 KiB |
+| The demo's own HTML, CSS and JavaScript | 106 KiB | 37 KiB |
+
+### Next
+
+- **Faster embedding.** WebGPU, or a smaller model, would be the lever; the
+  vectors would then need the same parity test against the CLI.
+- **PDF and DOCX** with JavaScript extractors that match the CLI's text, or
+  a clear statement that they differ.
+- **Memory.** The writer holds every chunk in WebAssembly memory before
+  `build`; very large folders would want a streaming writer.
+- **npm.** Publish `notelight-wasm` with `chunkText`, `IndexWriter` and
+  `Index`.

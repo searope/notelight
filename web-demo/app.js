@@ -1,9 +1,12 @@
-// The demo page: load an index generation into WebAssembly memory, then
-// search it with the Rust core. When the index has bge-small embeddings, the
-// query is embedded here too (embed.js, onnxruntime-web) and the search is
-// hybrid. The page, the .wasm, the runtime and the sample index are served
-// from this folder; the only other request is the one-time model download,
-// which is verified by SHA-256 and kept in the browser's Cache API.
+// The demo page: index a folder of the user's notes in the browser, or load
+// an existing index generation, into WebAssembly memory, then search it with
+// the Rust core. When the index has bge-small embeddings, the query is
+// embedded here too (embed.js, onnxruntime-web) and the search is hybrid.
+// Indexing and storage run in a worker (index-worker.js): files are read
+// there, chunked by the core, embedded, and kept in the Origin Private File
+// System (or IndexedDB). The page, the .wasm, the runtime and the sample
+// index are served from this folder; the only other request is the one-time
+// model download, which is verified by SHA-256 and kept in the Cache API.
 //
 // URL parameters, for measuring other indexes without the folder picker:
 //   ?index=<url of a generation folder>  load it on start
@@ -12,6 +15,8 @@
 //                                        of the Hub (laid out like the Python
 //                                        model cache's revision folder)
 //   ?threads=1                           embed on one thread (no service worker)
+//   ?index-threads=N                     threads for embedding while indexing
+//                                        (default: up to 8, as many as there are cores)
 import init, { Index, version } from "./pkg/notelight_wasm.js";
 import { bench, benchEmbedded, formatBench } from "./bench.js";
 import {
@@ -21,6 +26,7 @@ import {
   modelIdOf,
   QueryEmbedder,
 } from "./embed.js";
+import { deleteHandle, loadHandle, saveHandle } from "./store.js";
 
 const ORT_URL = "./vendor/onnxruntime-web/ort.wasm.min.mjs";
 const CACHE_NAME = "notelight-models";
@@ -31,6 +37,7 @@ let index = null;
 let embedder = null; // a QueryEmbedder once loaded, reused across indexes
 let embedderLoading = null; // the pending load, so two indexes do not load it twice
 let useVectors = false; // whether the open index takes our query vectors
+let openId = null; // the stored index that is open, if any
 
 function setStatus(text, isError = false) {
   $("status").textContent = text;
@@ -111,10 +118,11 @@ async function prepareVectors(source) {
 }
 
 /** Open an index from the four files' bytes, show what was loaded, set up search. */
-async function open(files, source, readMs) {
+async function open(files, source, readMs, storedId = null) {
   index?.free();
   index = null;
   useVectors = false;
+  openId = storedId;
   const start = performance.now();
   index = new Index(files.manifest, files.docs, files.bm25, files.vectors ?? null);
   const openMs = performance.now() - start;
@@ -291,6 +299,291 @@ async function isolate() {
   return true;
 }
 
+// --------------------------------------------------------------------------
+// Your notes: indexing in the worker, stored indexes
+// --------------------------------------------------------------------------
+
+let worker = null;
+let nextReq = 0;
+const pending = new Map();
+
+/** Ask the worker to run `op`; `onProgress` gets its progress messages. */
+function call(op, payload = {}, onProgress = null) {
+  const reqId = ++nextReq;
+  return new Promise((resolve, reject) => {
+    pending.set(reqId, { resolve, reject, onProgress });
+    worker.postMessage({ reqId, op, ...payload });
+  });
+}
+
+function startWorker() {
+  worker = new Worker(new URL("./index-worker.js", import.meta.url), { type: "module" });
+  worker.onmessage = ({ data }) => {
+    const req = pending.get(data.reqId);
+    if (!req) return;
+    if (data.progress) {
+      req.onProgress?.(data.progress);
+      return;
+    }
+    pending.delete(data.reqId);
+    if (data.error) {
+      const e = new Error(data.error.message);
+      e.name = data.error.name;
+      req.reject(e);
+    } else {
+      req.resolve(data.result);
+    }
+  };
+  worker.onerror = (e) => {
+    // A worker that fails to load (or crashes) answers nothing: fail every request.
+    const error = new Error(`the indexing worker failed (${e.message || "it could not be loaded"})`);
+    for (const req of pending.values()) req.reject(error);
+    pending.clear();
+  };
+}
+
+function setIndexStatus(text, isError = false) {
+  $("index-status").textContent = text;
+  $("index-status").classList.toggle("error", isError);
+}
+
+const STAGES = {
+  scan: "Looking through the folder…",
+  model: "Loading the bge-small embedder…",
+  read: "Reading and chunking files",
+  embed: "Embedding chunks",
+  write: "Writing the index…",
+  done: "Done",
+};
+
+function showProgress({ stage, done, total }) {
+  const bar = $("progress-bar");
+  if (total > 0) {
+    bar.max = total;
+    bar.value = done;
+  } else {
+    bar.removeAttribute("value"); // indeterminate
+  }
+  let text = STAGES[stage] ?? stage;
+  if (stage === "model" && total > 0) text = `Downloading bge-small (one time): ${kib(done)} of ${kib(total)}`;
+  else if (total > 0) text += `: ${done.toLocaleString()} of ${total.toLocaleString()}`;
+  $("progress-text").textContent = text;
+}
+
+const rate = (n, msTaken) => (msTaken > 0 ? n / (msTaken / 1000) : 0);
+const fmtRate = (x) => (x >= 100 ? x.toFixed(0) : x.toFixed(1));
+
+/** One line on what a sync did and how fast, from the indexer's stats. */
+function describeSync(stats, name) {
+  const t = stats.ms;
+  if (stats.upToDate) {
+    return `${name} is up to date: ${stats.files} files checked in ${ms(t.total)}, nothing to re-index.`;
+  }
+  const mib = stats.bytesIndexed / 1048576;
+  const parts = [
+    `Indexed ${name}: ${stats.files.toLocaleString()} files (${kib(stats.bytesIndexed)}), ` +
+      `${stats.chunks.toLocaleString()} chunks in ${ms(t.total)}: ` +
+      `${fmtRate(rate(stats.chunks, t.total))} chunks/s, ${fmtRate(mib / (t.total / 1000))} MiB/s.`,
+  ];
+  if (stats.embedder) {
+    parts.push(
+      stats.embedded
+        ? `Embedded ${stats.embedded.toLocaleString()} new chunks in ${ms(t.embed)} ` +
+            `(${fmtRate(rate(stats.embedded, t.embed))} chunks/s on ${stats.threads} thread${stats.threads === 1 ? "" : "s"}); ` +
+            `the rest came from the cache.`
+        : "Every embedding came from the cache.",
+    );
+    if (t.model) parts.push(`Model loaded in ${ms(t.model)} (not counted above).`);
+  } else {
+    parts.push("Keyword search only.");
+  }
+  if (stats.added || stats.changed || stats.removed) {
+    parts.push(`${stats.added} added, ${stats.changed} changed, ${stats.removed} removed.`);
+  }
+  return parts.join(" ");
+}
+
+function showSkipped(skipped) {
+  const box = $("skipped");
+  box.hidden = skipped.length === 0;
+  if (box.hidden) return;
+  box.querySelector("summary").textContent = `${skipped.length} file${skipped.length === 1 ? "" : "s"} skipped`;
+  box.querySelector("ul").replaceChildren(
+    ...skipped.map(({ path, reason }) => {
+      const li = document.createElement("li");
+      li.textContent = `${path}: ${reason}`;
+      return li;
+    }),
+  );
+}
+
+async function refreshStored() {
+  const metas = await call("list");
+  const items = metas.map((meta) => {
+    const li = $("stored-item").content.firstElementChild.cloneNode(true);
+    li.querySelector(".stored-name").textContent = meta.name;
+    const kind = meta.embedder ? "semantic + keywords" : "keywords only";
+    li.querySelector(".stored-info").textContent =
+      `${meta.files.length.toLocaleString()} files, ${meta.stats.chunks.toLocaleString()} chunks, ${kind}, ` +
+      `updated ${new Date(meta.updated).toLocaleString()}`;
+    for (const button of li.querySelectorAll("button")) {
+      button.addEventListener("click", () => storedAction(button.dataset.action, meta));
+    }
+    return li;
+  });
+  $("stored").replaceChildren(...items);
+  const usage = (await navigator.storage?.estimate?.())?.usage;
+  const persisted = await navigator.storage?.persisted?.();
+  const where = storeKind === "opfs" ? "the browser's private file system for this site (OPFS)" : "IndexedDB";
+  $("storage-note").textContent = metas.length
+    ? `Indexes are kept in ${where}` +
+      (usage ? `; this site uses ${kib(usage)} in all, the model included` : "") +
+      (persisted ? "." : ". The browser may clear them if the disk runs low on space.")
+    : "";
+}
+
+let storeKind = null;
+let busy = false;
+
+/** Index (or update) a folder in the worker, then open the result. */
+async function runIndex({ id = null, name, source, semantic }) {
+  if (busy) return;
+  busy = true;
+  $("index-folder").disabled = true;
+  $("progress").hidden = false;
+  $("cancel").disabled = false;
+  setIndexStatus("");
+  showSkipped([]);
+  showProgress({ stage: "scan", done: 0, total: 0 });
+  // Ask the browser to keep the indexes when space runs low (Chrome may
+  // grant it silently; Firefox asks).
+  navigator.storage?.persist?.().catch(() => {});
+  try {
+    const { stats, meta, files } = await call(
+      "index",
+      { id, name, source, semantic, mirror: params.get("model") },
+      showProgress,
+    );
+    window.indexStats = stats; // for measuring from DevTools
+    if (source.handle) await saveHandle(meta.id, source.handle).catch(() => {});
+    setIndexStatus(describeSync(stats, meta.name));
+    showSkipped(stats.skipped);
+    await refreshStored();
+    if (files) {
+      await open(files, meta.name, 0, meta.id);
+    } else if (openId !== meta.id) {
+      await openStored(meta);
+    }
+  } catch (e) {
+    const cancelled = e.name === "AbortError";
+    setIndexStatus(
+      cancelled ? "Cancelled. Embeddings finished so far are kept, so indexing again resumes from there." : e.message,
+      !cancelled,
+    );
+  } finally {
+    busy = false;
+    $("index-folder").disabled = false;
+    $("progress").hidden = true;
+  }
+}
+
+async function openStored(meta) {
+  setStatus(`Opening ${meta.name}…`);
+  const start = performance.now();
+  const { files } = await call("load", { id: meta.id });
+  await open(files, meta.name, performance.now() - start, meta.id);
+}
+
+/** Pick a folder: the File System Access API where there is one, else the input. */
+async function pickFolder(updateId = null, semantic = $("semantic").checked) {
+  if (window.showDirectoryPicker) {
+    let handle;
+    try {
+      handle = await window.showDirectoryPicker({ id: "notelight", mode: "read" });
+    } catch (e) {
+      if (e.name !== "AbortError") setIndexStatus(e.message, true);
+      return;
+    }
+    await runIndex({ id: updateId, name: handle.name, source: { handle }, semantic });
+  } else {
+    pendingPick = { id: updateId, semantic };
+    $("index-pick").value = "";
+    $("index-pick").click();
+  }
+}
+let pendingPick = null;
+
+async function storedAction(action, meta) {
+  if (action === "open") {
+    await openStored(meta);
+  } else if (action === "update") {
+    const semantic = meta.embedder !== null;
+    const handle = window.showDirectoryPicker ? await loadHandle(meta.id).catch(() => null) : null;
+    if (handle && (await handle.requestPermission({ mode: "read" })) === "granted") {
+      await runIndex({ id: meta.id, name: meta.name, source: { handle }, semantic });
+    } else {
+      setIndexStatus(`Pick the folder ${meta.name} again to update its index.`);
+      await pickFolder(meta.id, semantic);
+    }
+  } else if (action === "delete") {
+    if (!confirm(`Delete the index of ${meta.name} from this browser? Your files are not touched.`)) return;
+    await call("delete", { id: meta.id });
+    await deleteHandle(meta.id).catch(() => {});
+    if (openId === meta.id) {
+      index?.free();
+      index = null;
+      openId = null;
+      $("search").hidden = true;
+      $("results").replaceChildren();
+      $("timing").textContent = "";
+      setStatus("The open index was deleted. Choose another.");
+    }
+    setIndexStatus(`Deleted the index of ${meta.name}.`);
+    await refreshStored();
+  }
+}
+
+async function setUpIndexing() {
+  try {
+    startWorker();
+    // Indexing embeds hundreds of chunks, where 8 threads are 1.5x faster than
+    // 4 (design notes, "v2: indexing in the browser"); queries stay on 4.
+    const threads = params.get("threads") === "1" ? 1 : Number(params.get("index-threads")) || 8;
+    ({ store: storeKind } = await call("init", { threads }));
+  } catch (e) {
+    setIndexStatus(`Indexing is not available in this browser (${e.message}).`, true);
+    return;
+  }
+  const guard = (fn) => async (...args) => {
+    try {
+      await fn(...args);
+    } catch (e) {
+      setIndexStatus(e.message ?? String(e), true);
+    }
+  };
+  $("index-folder").disabled = false;
+  $("index-folder").addEventListener("click", guard(() => pickFolder()));
+  $("index-pick").addEventListener(
+    "change",
+    guard(async (ev) => {
+      const picked = [...ev.target.files];
+      const { id, semantic } = pendingPick ?? { id: null, semantic: $("semantic").checked };
+      pendingPick = null;
+      if (!picked.length) return;
+      // webkitRelativePath does not survive postMessage, so send it alongside.
+      const files = picked.map((file) => ({ path: file.webkitRelativePath, file }));
+      const name = files[0].path.split("/")[0];
+      await runIndex({ id, name, source: { files }, semantic });
+    }),
+  );
+  $("cancel").addEventListener("click", () => {
+    $("cancel").disabled = true;
+    $("progress-text").textContent = "Cancelling after the current batch…";
+    worker.postMessage({ op: "cancel" });
+  });
+  await guard(refreshStored)();
+}
+
 async function main() {
   if (await isolate()) return;
   try {
@@ -299,7 +592,8 @@ async function main() {
     setStatus(`Could not load the WebAssembly module (${e.message}). Build it with: python scripts/build_wasm.py`, true);
     return;
   }
-  setStatus(`notelight-core ${version()} is loaded. Choose an index.`);
+  setStatus(`notelight-core ${version()} is loaded. Index a folder or choose an index.`);
+  await setUpIndexing();
 
   const guard = (fn) => async (...args) => {
     try {

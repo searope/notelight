@@ -22,6 +22,8 @@
 }
 
 * { box-sizing: border-box; }
+/* Elements styled with display: flex must still hide when [hidden]. */
+[hidden] { display: none !important; }
 
 body {
   margin: 0 auto;
@@ -33,6 +35,7 @@ body {
 }
 
 h1 { margin: 0; font-size: 1.6rem; }
+h2 { font-size: 1.15rem; margin: 1.5rem 0 0.5rem; }
 .tag {
   font-size: 0.75rem;
   font-weight: 500;
@@ -65,6 +68,35 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 .search { display: flex; gap: 0.5rem; margin: 1rem 0 0.25rem; }
 .search input { flex: 1; min-width: 0; }
+
+.mine {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  padding: 0.25rem 1rem 1rem;
+  margin: 1rem 0;
+}
+.privacy { margin: 0.25rem 0 0.75rem; }
+.row { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center; }
+.check { display: inline-flex; gap: 0.4rem; align-items: center; }
+.progress { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin-top: 0.75rem; }
+.progress progress { flex: 1; min-width: 8rem; }
+.progress span { color: var(--muted); font-size: 0.9rem; }
+.skipped { font-size: 0.9rem; color: var(--muted); }
+.skipped ul { margin: 0.25rem 0; padding-left: 1.25rem; max-height: 12rem; overflow-y: auto; }
+.stored { list-style: none; padding: 0; margin: 0.75rem 0 0; display: grid; gap: 0.5rem; }
+.stored li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.1rem 1rem;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  padding-top: 0.5rem;
+}
+.stored-name { font-weight: 600; overflow-wrap: anywhere; }
+.stored-info { color: var(--muted); font-size: 0.85rem; grid-column: 1; }
+.stored-actions { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: 0.4rem; }
+.stored-actions button { padding: 0.3rem 0.7rem; }
 
 .status { color: var(--muted); min-height: 1.5em; }
 .status.error { color: #c62828; }
@@ -108,4 +140,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 @media (max-width: 30rem) {
   .search { flex-wrap: wrap; }
   .search input { flex-basis: 100%; }
+  .stored li { grid-template-columns: 1fr; }
+  .stored-actions { grid-column: 1; grid-row: auto; }
 }

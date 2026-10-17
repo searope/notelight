@@ -12,13 +12,45 @@
 <header>
   <h1>notelight <span class="tag">WebAssembly demo</span></h1>
   <p class="lede">
-    The Rust search core, compiled to WebAssembly. The index is read into this
-    page and searched here, and queries are embedded here with bge-small:
-    nothing is uploaded.
+    The Rust search core, compiled to WebAssembly. Index a folder of your
+    notes, or open the sample: indexing, embedding with bge-small and search
+    all run in this page, and nothing is uploaded.
   </p>
 </header>
 
 <main>
+  <section class="mine" aria-labelledby="mine-title">
+    <h2 id="mine-title">Your notes</h2>
+    <p class="privacy">
+      <strong>Your files never leave this browser.</strong> They are read,
+      chunked, embedded and stored on this device, in storage private to this
+      site. The only network request is the one-time download of the bge-small
+      model from Hugging Face, checked by SHA-256.
+    </p>
+    <div class="row">
+      <button id="index-folder" type="button" disabled>Index a folder…</button>
+      <input id="index-pick" class="visually-hidden" type="file" webkitdirectory multiple tabindex="-1" aria-hidden="true">
+      <label class="check"><input id="semantic" type="checkbox" checked> Semantic search (bge-small, 127 MiB once)</label>
+    </div>
+    <p class="hint">
+      Reads <code>.md</code>, <code>.markdown</code> and <code>.txt</code> files,
+      skipping hidden and build folders and whatever a <code>.notelightignore</code>
+      lists, as the CLI does; PDF and DOCX are skipped for now. Updating an index
+      embeds only the chunks that changed. Without semantic search the index is
+      keywords only and the model is not needed.
+    </p>
+    <div id="progress" class="progress" hidden>
+      <progress id="progress-bar"></progress>
+      <span id="progress-text" role="status" aria-live="polite"></span>
+      <button id="cancel" type="button" class="secondary">Cancel</button>
+    </div>
+    <p id="index-status" class="status" role="status" aria-live="polite"></p>
+    <details id="skipped" class="skipped" hidden><summary></summary><ul></ul></details>
+    <ul id="stored" class="stored" aria-label="Stored indexes"></ul>
+    <p id="storage-note" class="hint"></p>
+  </section>
+
+  <h2>Or open an index</h2>
   <section class="load" aria-label="Choose an index">
     <button id="load-sample" type="button">Load the sample index</button>
     <label class="picker">
@@ -29,8 +61,8 @@
       The sample is this repository's <code>docs/</code>, indexed with the
       default embedder. The first hybrid search downloads bge-small (127 MiB)
       once; it is checked by SHA-256 and kept in this browser.
-      To open your own, pick the index folder <code>notelight status</code> prints
-      (or one <code>gen-NNNNNN</code> folder inside it).
+      To open one the CLI built, pick the index folder <code>notelight status</code>
+      prints (or one <code>gen-NNNNNN</code> folder inside it).
     </p>
   </section>
 
@@ -53,6 +85,18 @@
   <pre id="bench-out" class="bench" hidden></pre>
   <ol id="results" class="results" aria-label="Results"></ol>
 </main>
+
+<template id="stored-item">
+  <li>
+    <div class="stored-name"></div>
+    <div class="stored-info"></div>
+    <div class="stored-actions">
+      <button type="button" data-action="open">Open</button>
+      <button type="button" data-action="update" class="secondary">Update</button>
+      <button type="button" data-action="delete" class="secondary">Delete</button>
+    </div>
+  </li>
+</template>
 
 <template id="result">
   <li>

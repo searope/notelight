@@ -31,16 +31,17 @@ crates/notelight-core/   pure Rust engine, no Python/ML/async deps (WASM-portabl
   benches/search.rs      criterion benchmarks (numbers quoted in README)
 crates/notelight-py/     thin PyO3 bindings -> python module notelight._core
 crates/notelight-py/src/ lib.rs, errors.rs (core Error -> Python exceptions), chunking.rs, index.rs
-crates/notelight-wasm/   wasm-bindgen bindings (v2): Index over in-memory files; tests/node.rs runs under Node
+crates/notelight-wasm/   wasm-bindgen bindings (v2): Index over in-memory files, chunkText, IndexWriter; tests/node.rs runs under Node
 python/notelight/        Python package: embed.py, ingest.py, documents.py (PDF/DOCX), indexer.py, search.py, paths.py, cli.py, mcp_server.py,
                          download.py, eval/ (datasets, notes benchmark, metrics, NumPy baseline, runner, report)
                          web/ (`notelight serve`: FastAPI over NotesService + static/ page)
 scripts/                 make_demo_gif.py (README demo GIF from a real MCP session),
                          build_wasm.py (-> web-demo/pkg), vendor_ort.py (-> web-demo/vendor),
                          serve_demo.py, make_sample_index.py (+ parity fixture),
-                         make_tokenizer_fixture.py, wasi_run.mjs
-web-demo/                static browser demo: wasm build, embed.js + tokenizer.js (bge-small
-                         queries via onnxruntime-web), committed sample index, tests/ (node --test)
+                         make_tokenizer_fixture.py, make_indexing_fixture.py, wasi_run.mjs
+web-demo/                static browser app: wasm build, embed.js + tokenizer.js (bge-small via
+                         onnxruntime-web), ingest.js + indexer.js + store.js + index-worker.js
+                         (index a folder in the browser, OPFS/IndexedDB), sample index, tests/
 tests/                   pytest
 docs/                    design-notes.md, index-format.md (spec), results.md (BEIR numbers), learning/
 ```
@@ -102,7 +103,7 @@ C++, x64/x86 build tools, Windows SDK).
 | 4 | MCP server (official Python SDK, stdio): search, read_context, list_sources, index_status; demo GIF | done |
 | 5a | Wheels via maturin-action (smoke-tested per OS), sdist, CHANGELOG, PyPI 0.1.0 | done; **0.1.0 and 0.1.1 published to PyPI 2026-10-16** (tags `v0.1.0`, `v0.1.1`; version lives in Cargo.toml `[workspace.package]`; trusted publishing via the `pypi` environment, which needs the owner's approval per release) |
 | 5b | Localhost web UI, PDF/DOCX extras, phrase ranking, CLI highlighting | done (PRs #5-#8); ships in 0.1.0 |
-| v2 | Same core compiled to wasm32 + TypeScript browser app | spike done: core runs in the browser at native speed (`web-demo/`); query embeddings in the browser done (hybrid search, parity with Python); app not started |
+| v2 | Same core compiled to wasm32 + browser app | spike done; query embeddings in the browser done; indexing a folder in the browser done (worker, OPFS/IndexedDB, incremental, parity with the CLI); npm package next |
 
 ## Milestone 2 notes (for whoever picks up M3)
 
@@ -178,6 +179,13 @@ C++, x64/x86 build tools, Windows SDK).
   SHA-512 + per-file SHA-256); bumping it means new hashes and new
   measurements. Decisions and numbers: design notes, "v2: query embeddings in
   the browser".
+- Indexing in the browser: `ingest.js` mirrors `ingest.py` (and ports
+  pathspec's gitignore matching) and `indexer.js` mirrors `indexer.py`'s
+  caches; change them together with the Python side, then re-run
+  `scripts/make_indexing_fixture.py` (the parity fixture in
+  `web-demo/tests/fixtures/indexing.json`). Browser storage layout
+  (`meta.json`, `embeddings.bin`) is in the design notes, "v2: indexing in
+  the browser"; generation files are the normal index format.
 
 ## Releasing (milestone 5a)
 

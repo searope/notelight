@@ -145,14 +145,16 @@ async function readBody(response, file, onProgress) {
 /**
  * The bytes of one pinned file, verified: from `cache` if it holds a copy
  * that verifies, else downloaded with `fetchFn` (and then cached).
+ * `onStage({file, stage})` is told when checking starts (`stage: "verify"`).
  * @returns {Promise<{bytes: Uint8Array, cached: boolean, fetchMs: number, verifyMs: number}>}
  */
-export async function loadVerified(url, file, { fetchFn = fetch, cache = null, onProgress } = {}) {
+export async function loadVerified(url, file, { fetchFn = fetch, cache = null, onProgress, onStage } = {}) {
   let start = performance.now();
   const cachedBytes = cache ? await cache.get(url) : null;
   if (cachedBytes) {
     const fetchMs = performance.now() - start;
     start = performance.now();
+    onStage?.({ file: file.path, stage: "verify" });
     try {
       await verify(file, cachedBytes);
       return { bytes: cachedBytes, cached: true, fetchMs, verifyMs: performance.now() - start };
@@ -172,6 +174,7 @@ export async function loadVerified(url, file, { fetchFn = fetch, cache = null, o
   const bytes = await readBody(response, file, onProgress);
   const fetchMs = performance.now() - start;
   start = performance.now();
+  onStage?.({ file: file.path, stage: "verify" });
   await verify(file, bytes);
   const verifyMs = performance.now() - start;
   await cache?.put(url, bytes);
@@ -214,9 +217,14 @@ export class QueryEmbedder {
    * @param {object} [options.cache]  {get, put, delete} over verified bytes, e.g. `browserCache()`
    * @param {Function} [options.fetchFn]  `fetch` replacement
    * @param {Function} [options.onProgress]  called with {file, received, total} while downloading
+   * @param {Function} [options.onStage]  called with {stage, file?} when a phase starts:
+   *   "verify" (per file, SHA-256 check) and "session" (ONNX Runtime session start)
    */
-  static async load(ort, { spec = BGE_SMALL_EN_V15, mirror = null, cache = null, fetchFn, onProgress } = {}) {
-    const opts = { cache, fetchFn, onProgress };
+  static async load(
+    ort,
+    { spec = BGE_SMALL_EN_V15, mirror = null, cache = null, fetchFn, onProgress, onStage } = {},
+  ) {
+    const opts = { cache, fetchFn, onProgress, onStage };
     const start = performance.now();
     const [tok, onnx] = await Promise.all([
       loadVerified(fileUrl(spec, spec.tokenizer, mirror), spec.tokenizer, opts),
@@ -228,6 +236,7 @@ export class QueryEmbedder {
       spec.maxTokens,
     );
     const sessionStart = performance.now();
+    onStage?.({ stage: "session" });
     const session = await ort.InferenceSession.create(onnx.bytes, {
       executionProviders: ["wasm"],
       graphOptimizationLevel: "all",

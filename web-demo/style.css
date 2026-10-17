@@ -143,3 +143,48 @@ button:disabled { opacity: 0.5; cursor: default; }
   .stored li { grid-template-columns: 1fr; }
   .stored-actions { grid-column: 1; grid-row: auto; }
 }
+
+/* Activity bar: pinned to the top of the window while the page is working
+   (loading the module, an index or the model, embedding, indexing), so it is
+   visible wherever the page is scrolled. */
+.activity {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: -1.5rem -1rem 1rem;
+  padding: 0.55rem 1rem;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.08);
+  font-size: 0.95rem;
+}
+.activity #activity-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.activity progress { flex: 0 0 12rem; max-width: 40%; accent-color: var(--accent); }
+.spinner {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; border-color: var(--accent); }
+}
+.results[aria-busy="true"] { opacity: 0.6; transition: opacity 0.15s; }
+.picker:has(input:disabled) span { opacity: 0.5; cursor: default; }
+@media (max-width: 30rem) {
+  .activity progress { flex-basis: 6rem; }
+}
+/* A brief highlight when an index has just been opened, so the eye finds the search box. */
+.search.ready { animation: ready-flash 1.6s ease-out; border-radius: 0.6rem; }
+@keyframes ready-flash {
+  0% { box-shadow: 0 0 0 0.25rem var(--accent); }
+  100% { box-shadow: 0 0 0 0.25rem transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .search.ready { animation: none; } }

@@ -8,6 +8,16 @@ format is detected and rebuilt by `notelight index`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Browser app after a deploy.** GitHub Pages lets browsers reuse each file
+  for 10 minutes (`Cache-Control: max-age=600`), so a returning visitor could
+  get the new `index.html` with an old `app.js`. The page's service worker
+  (`coi-sw.js`) now fetches same-origin files with `cache: "no-cache"`, so
+  every load revalidates them by ETag: unchanged files are a 304 with no
+  body, changed ones are fetched. Cross-origin requests (the model) are
+  untouched.
+
 ### Changed
 
 - **The browser app shows what it is doing.** An activity bar pinned to the

@@ -235,11 +235,10 @@ C++, x64/x86 build tools, Windows SDK).
   tarball from the `npm` environment via trusted publishing (OIDC, no token).
 - State: 0.2.0 is on npm (2026-10-17), published by hand from the CI-built
   tarball (same shasum), so without provenance. The package also lists a
-  `0.0.0-stage` placeholder from its creation; deprecate it with
-  `npm deprecate notelight-wasm@0.0.0-stage "placeholder; use 0.2.0 or later"`.
-  The `npm` environment exists with the tag rule `npm-v*`; give it a
-  required reviewer (the owner) so a tag waits for approval. What happened
-  and why: design notes, "v2: the npm package", "Versions and publishing".
+  `0.0.0-stage` placeholder from its creation, deprecated ("placeholder; use
+  0.2.0 or later"). The `npm` environment allows only `npm-v*` tags and
+  requires the owner's approval. What happened and why: design notes, "v2:
+  the npm package", "Versions and publishing".
 - Publish only through the workflow; never `npm publish` by hand, or the
   tag's run fails ("cannot publish over") and the version has no
   provenance. Owner steps for each release:

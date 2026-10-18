@@ -23,6 +23,7 @@ from notelight.cli import app
 from notelight.embed import HashingEmbedder
 from notelight.errors import DatasetNotAvailableError
 from notelight.eval import (
+    NOTES_SETS,
     NOTES_SPLITS,
     NOTES_STYLES,
     Dataset,
@@ -141,6 +142,19 @@ def test_load_notes_splits(notes_folder: Path) -> None:
         load_notes(split="test", folder=notes_folder)
     with pytest.raises(ValueError, match="positive"):
         load_notes(max_chars=0, folder=notes_folder)
+
+
+def test_load_notes_query_sets(tmp_path: Path) -> None:
+    later = {**QUERIES[0], "id": "s2", "set": 2, "text": "lock again"}
+    folder = _write_notes(tmp_path / "notes", [*QUERIES, later])
+    first = load_notes(split="tune", folder=folder)
+    second = load_notes(split="tune", query_set=2, folder=folder)
+    assert list(first.queries) == ["k1", "q1"] and list(second.queries) == ["s2"]
+    assert second.name == "notes2-tune" and second.doc_ids == first.doc_ids
+    assert second.fingerprint != first.fingerprint
+    assert load_notes(split="all", query_set=2, max_chars=20, folder=folder).name == "notes2-all@20"
+    with pytest.raises(DatasetNotAvailableError, match="unknown query set"):
+        load_notes(query_set=3, folder=folder)
 
 
 def test_chunks_cover_the_passages_they_overlap(notes_folder: Path) -> None:
@@ -273,6 +287,7 @@ def test_load_dataset_routes_notes() -> None:
     ds = load_dataset("notes", notes_split="heldout", max_chars=600)
     assert ds.name == "notes-heldout@600"
     assert load_dataset("notes").name == "notes-tune"
+    assert load_dataset("notes2", notes_split="all").name == "notes2-all"
     with pytest.raises(DatasetNotAvailableError, match="notes benchmark only"):
         load_dataset("scifact", max_chars=600)
 
@@ -299,24 +314,37 @@ def _bundled() -> dict[str, Any]:
 
 
 def test_bundled_benchmark_loads_and_its_splits_partition_it() -> None:
-    tune, heldout = load_notes(split="tune"), load_notes(split="heldout")
-    every = load_notes(split="all")
-    assert set(tune.queries).isdisjoint(heldout.queries)
-    assert set(tune.queries) | set(heldout.queries) == set(every.queries)
-    assert 60 <= len(every.queries) <= 100
     assert NOTES_SPLITS == ("tune", "heldout", "all")
+    assert NOTES_SETS == (1, 2)
+    seen: set[str] = set()
+    for query_set in NOTES_SETS:
+        tune = load_notes(split="tune", query_set=query_set)
+        heldout = load_notes(split="heldout", query_set=query_set)
+        every = load_notes(split="all", query_set=query_set)
+        assert set(tune.queries).isdisjoint(heldout.queries)
+        assert set(tune.queries) | set(heldout.queries) == set(every.queries)
+        assert 60 <= len(every.queries) <= 100
+        assert seen.isdisjoint(every.queries)
+        seen |= set(every.queries)
+    assert len(seen) == len(_bundled()["queries"])
 
 
 def test_bundled_splits_alternate_within_each_style() -> None:
     queries = _bundled()["queries"]
-    for style in NOTES_STYLES:
-        of_style = [q for q in queries if q["style"] == style]
-        assert len(of_style) >= 10
-        assert [q["split"] for q in of_style] == [
-            "tune" if i % 2 == 0 else "heldout" for i in range(len(of_style))
-        ]
-    counts = Counter(q["split"] for q in queries)
-    assert abs(counts["tune"] - counts["heldout"]) <= len(NOTES_STYLES)
+    assert {q.get("set", 1) for q in queries} == set(NOTES_SETS)
+    for query_set in NOTES_SETS:
+        of_set = [q for q in queries if q.get("set", 1) == query_set]
+        for style in NOTES_STYLES:
+            of_style = [q for q in of_set if q["style"] == style]
+            assert len(of_style) >= 10
+            assert [q["split"] for q in of_style] == [
+                "tune" if i % 2 == 0 else "heldout" for i in range(len(of_style))
+            ]
+        counts = Counter(q["split"] for q in of_set)
+        assert abs(counts["tune"] - counts["heldout"]) <= len(NOTES_STYLES)
+    # Sets are appended, never interleaved: a later set only adds queries at the end.
+    sets = [q.get("set", 1) for q in queries]
+    assert sets == sorted(sets)
 
 
 def test_bundled_queries_are_well_formed() -> None:
@@ -363,4 +391,5 @@ def test_bundled_corpus_is_pinned() -> None:
     # Every labelled file is in the corpus, and the loader checked the hashes.
     labelled = {path for q in spec["queries"] for path, *_ in q["relevant"]}
     assert labelled <= set(spec["corpus_files"])
-    assert math.isclose(len(load_notes(split="all").queries), len(spec["queries"]))
+    loaded = sum(len(load_notes(split="all", query_set=s).queries) for s in NOTES_SETS)
+    assert math.isclose(loaded, len(spec["queries"]))

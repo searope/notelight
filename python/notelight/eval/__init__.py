@@ -18,7 +18,7 @@ from notelight.eval.datasets import (
     load_dataset,
 )
 from notelight.eval.metrics import mrr_at_k, ndcg_at_k, overlap_at_k, recall_at_k
-from notelight.eval.notes import NOTES_SPLITS, NOTES_STYLES, load_notes
+from notelight.eval.notes import NOTES_SETS, NOTES_SPLITS, NOTES_STYLES, load_notes
 from notelight.eval.report import format_markdown
 from notelight.eval.runner import (
     BASELINE_SEARCHES,
@@ -34,6 +34,7 @@ __all__ = [
     "BASELINE_SEARCHES",
     "BEIR_DATASETS",
     "METHODS",
+    "NOTES_SETS",
     "NOTES_SPLITS",
     "NOTES_STYLES",
     "BaselineRow",

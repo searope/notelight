@@ -7,8 +7,8 @@ scale and with the limits stated in `docs/results.md`.
 
 The data lives in `notes/` next to this module:
 
-    queries.json     queries, their style, their split (tune or heldout), how
-                     each was written, and relevant passages as
+    queries.json     queries, their set, style and split (tune or heldout), how
+                     each set was written, and relevant passages as
                      [path, line_start, line_end, grade]
     corpus.json.gz   the corpus files at `corpus_commit`, {path: text}, checked
                      against the SHA-256 per file recorded in queries.json
@@ -17,6 +17,10 @@ The corpus is chunked with the real chunker, so `max_chars` can be swept.
 Labels are line ranges, not chunk ids, so they hold for any chunking: a chunk
 is relevant to a query when its lines overlap a labelled passage (see
 `Dataset.judged_ranking`).
+
+Queries come in sets over the same corpus. Set 1 is the original benchmark;
+set 2 was added once set 1's halves had informed several decisions. A set is
+never edited after its first run; new queries go into a new set.
 """
 
 from __future__ import annotations
@@ -33,7 +37,7 @@ from notelight.errors import DatasetNotAvailableError
 from notelight.eval.datasets import Dataset
 from notelight.indexer import DEFAULT_MAX_CHARS
 
-__all__ = ["NOTES_DIR", "NOTES_SPLITS", "NOTES_STYLES", "Passage", "load_notes"]
+__all__ = ["NOTES_DIR", "NOTES_SETS", "NOTES_SPLITS", "NOTES_STYLES", "Passage", "load_notes"]
 
 #: The bundled benchmark.
 NOTES_DIR = Path(__file__).with_name("notes")
@@ -41,6 +45,9 @@ NOTES_DIR = Path(__file__).with_name("notes")
 #: `tune` is for choosing settings, `heldout` is reported once for the chosen
 #: settings, `all` is both.
 NOTES_SPLITS: tuple[str, ...] = ("tune", "heldout", "all")
+
+#: Query sets. A query without a `set` field belongs to set 1.
+NOTES_SETS: tuple[int, ...] = (1, 2)
 
 #: Query styles, in report order.
 NOTES_STYLES: tuple[str, ...] = ("keyword", "phrase", "question", "paraphrase")
@@ -87,22 +94,26 @@ def load_notes(
     *,
     split: str = "tune",
     max_chars: int = DEFAULT_MAX_CHARS,
+    query_set: int = 1,
     folder: Path | None = None,
 ) -> Dataset:
-    """Chunk the notes corpus and load the queries of one split.
+    """Chunk the notes corpus and load the queries of one set and split.
 
     `folder` defaults to the bundled benchmark; tests pass a small one in the
-    same layout. The dataset is named `notes-<split>`, plus `@<max_chars>`
-    when the chunk size is not the default.
+    same layout. The dataset is named `notes-<split>` for set 1 and
+    `notes<set>-<split>` for later sets, plus `@<max_chars>` when the chunk
+    size is not the default.
 
     Raises:
-        DatasetNotAvailableError: an unknown split, a missing or malformed
+        DatasetNotAvailableError: an unknown set or split, a missing or malformed
             file, a corpus file that does not match its hash, or a label
             outside its file.
         ValueError: `max_chars` < 1.
     """
     if split not in NOTES_SPLITS:
         raise DatasetNotAvailableError(f"unknown split {split!r}; choose from {NOTES_SPLITS}")
+    if query_set not in NOTES_SETS:
+        raise DatasetNotAvailableError(f"unknown query set {query_set!r}; choose from {NOTES_SETS}")
     if max_chars < 1:
         raise ValueError("max_chars must be positive")
     folder = folder if folder is not None else NOTES_DIR
@@ -132,7 +143,7 @@ def load_notes(
     passages: dict[str, Passage] = {}
     try:
         for q in spec["queries"]:
-            if split != "all" and q["split"] != split:
+            if q.get("set", 1) != query_set or (split != "all" and q["split"] != split):
                 continue
             if q["style"] not in NOTES_STYLES:
                 raise _bad(folder, f"query {q['id']}: unknown style {q['style']!r}")
@@ -154,8 +165,10 @@ def load_notes(
         for doc_id, loc in zip(doc_ids, locations, strict=True)
     }
     h = hashlib.sha256(raw)
-    h.update(f"\nmax_chars={max_chars}".encode())
-    name = f"notes-{split}" if max_chars == DEFAULT_MAX_CHARS else f"notes-{split}@{max_chars}"
+    h.update(f"\nmax_chars={max_chars}\nset={query_set}".encode())
+    name = f"notes-{split}" if query_set == 1 else f"notes{query_set}-{split}"
+    if max_chars != DEFAULT_MAX_CHARS:
+        name += f"@{max_chars}"
     return Dataset(
         name=name,
         doc_ids=doc_ids,

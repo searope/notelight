@@ -31,6 +31,7 @@ from notelight.errors import DatasetNotAvailableError
 __all__ = [
     "BEIR_DATASETS",
     "NOTES_NAME",
+    "NOTES_SET_NAMES",
     "Dataset",
     "DatasetSpec",
     "ensure_dataset",
@@ -40,8 +41,12 @@ __all__ = [
 
 BEIR_BASE_URL = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets"
 
-#: Name of the bundled notes benchmark (`notelight.eval.notes`).
+#: Name of the bundled notes benchmark (`notelight.eval.notes`), query set 1.
 NOTES_NAME = "notes"
+
+#: Dataset names of the notes benchmark's query sets: `notes` is set 1,
+#: `notes2` set 2.
+NOTES_SET_NAMES: dict[str, int] = {NOTES_NAME: 1, "notes2": 2}
 
 
 @dataclass(frozen=True)
@@ -261,22 +266,23 @@ def load_dataset(
     notes_split: str = "tune",
     max_chars: int | None = None,
 ) -> Dataset:
-    """Load a pinned BEIR dataset by name, the bundled `notes` benchmark, or a
-    BEIR-layout folder by path.
+    """Load a pinned BEIR dataset by name, the bundled notes benchmark
+    (`notes` for query set 1, `notes2` for set 2), or a BEIR-layout folder by path.
 
-    `notes_split` and `max_chars` apply to `notes` only (see
+    `notes_split` and `max_chars` apply to the notes benchmark only (see
     `notelight.eval.notes.load_notes`); BEIR documents are never re-chunked.
 
     Raises:
         DatasetNotAvailableError: unknown name, missing folder, a failed
             download, or `max_chars` given for a BEIR dataset.
     """
-    if name_or_path == NOTES_NAME:
+    query_set = NOTES_SET_NAMES.get(name_or_path)
+    if query_set is not None:
         from notelight.eval.notes import load_notes  # notes imports this module
 
         if max_chars is None:
-            return load_notes(split=notes_split)
-        return load_notes(split=notes_split, max_chars=max_chars)
+            return load_notes(split=notes_split, query_set=query_set)
+        return load_notes(split=notes_split, max_chars=max_chars, query_set=query_set)
     if max_chars is not None:
         raise DatasetNotAvailableError(
             f"--max-chars applies to the {NOTES_NAME} benchmark only, not {name_or_path}"
@@ -287,7 +293,7 @@ def load_dataset(
         return load_beir(folder, split=spec.split, name=spec.name)
     folder = Path(name_or_path)
     if not folder.is_dir():
-        known = ", ".join([*BEIR_DATASETS, NOTES_NAME])
+        known = ", ".join([*BEIR_DATASETS, *NOTES_SET_NAMES])
         raise DatasetNotAvailableError(
             f"{name_or_path!r} is neither a known dataset ({known}) nor a folder"
         )

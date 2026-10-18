@@ -124,6 +124,14 @@ with the package (`python/notelight/eval/notes/`).
   held-out half was run once: change a default only if the held-out paired
   95% bootstrap interval of the nDCG@10 difference excludes zero and agrees
   with tune.
+- **Query set 2** (`notelight eval notes2`): once set 1's halves had
+  informed three decisions, 80 new queries over the same corpus were added
+  the same way (24 keyword, 16 phrase, 20 question, 20 paraphrase; 40 per
+  half), avoiding needs set 1 already covers, and committed with the next
+  experiment's plan before any search with them (commit `833cc8c`). Their
+  author knew set 1's results and the hypothesis to be tested, which the
+  held-out half and BEIR are there to check. `notelight eval notes` is
+  still set 1, so the numbers above reproduce.
 
 **Limits.** The benchmark is small: 41 queries per half, and 5 paraphrases
 per half. Paired differences under about 0.04 nDCG@10 are within noise, and
@@ -260,6 +268,75 @@ BEIR gains, which played no part in choosing it, are the evidence that it
 is not just fitted to it. Counting the terms each hit contains costs 0.02 to
 0.06 ms per query (see [Latency](#latency)).
 
+### Fusion: weighting vector hits (tested, not shipped)
+
+Coverage weighting left two gaps: on FiQA, hybrid (0.376) stays below the
+vectors alone (0.403), and on set 1's tune half keyword queries scored lower
+fused (0.749) than with BM25 alone (0.827), as if the vectors diluted good
+keyword hits. The natural fix for the second is a weight on the vector side
+when BM25 is clearly right. It was tested on query set 2, with five
+candidates, the pick rule and the ship rule written down and committed
+before any set-2 query ran (`c1` is the share of query terms in BM25's top
+hit; BM25 hits keep coverage²):
+
+- **V1**: vector hits count 0.5 when BM25's top hit has every query term;
+- **V2**: vector hits count `1 − 0.5·c1²`;
+- **V3**: each vector hit counts `(1 + coverage²) / 2`, by the terms it contains;
+- **B3**: BM25 hits count coverage³ instead of coverage² (for FiQA, where the
+  vectors are already better);
+- the best V with B3, if both beat the default on tune (B3 did not).
+
+The search was a Python copy of `IndexReader::search`
+(`scripts/fusion_lab.py`), which returned the core's top 10 for every notes
+and BEIR query. First, what set
+2 says about the gap itself (core, default settings, nDCG@10):
+
+| Set 2 | vectors | BM25 | hybrid | keyword: vectors / BM25 / hybrid |
+|---|---:|---:|---:|---:|
+| tune (40) | 0.417 | 0.692 | 0.695 | 0.427 / 0.933 / 0.913 |
+| held-out (40) | 0.508 | 0.711 | 0.790 | 0.547 / 0.922 / 0.936 |
+
+On new keyword queries the fused list is 0.020 below BM25 on tune and 0.014
+above it on held-out: the large gap on set 1's tune half did not come back.
+Hybrid on set 2's **tune** half:
+
+| Candidate | nDCG@10 | keyword | phrase | question | paraphrase | vs default (95% CI) | better / worse |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| default (coverage²) | 0.695 | 0.913 | 0.909 | 0.892 | 0.062 | | |
+| **V1 (picked)** | 0.696 | 0.913 | 0.918 | 0.892 | 0.062 | +0.002 (−0.001 to +0.006) | 1 / 1 |
+| V2 | 0.695 | 0.913 | 0.918 | 0.886 | 0.062 | +0.000 (−0.013 to +0.012) | 2 / 2 |
+| V3 | 0.693 | 0.913 | 0.919 | 0.881 | 0.058 | −0.002 (−0.016 to +0.011) | 2 / 3 |
+| B3 | 0.693 | 0.913 | 0.909 | 0.885 | 0.062 | −0.002 (−0.004 to +0.000) | 0 / 2 |
+
+V1 won by the rule, on two changed queries. The **held-out** half, run once
+for V1 and the default: 0.792 against 0.790, +0.002 (0.000 to +0.004; 3
+queries better, none worse). The interval does not exclude zero (4.5% of
+resamples show no gain), so by the rule the default stays. For information,
+on BEIR (hybrid nDCG@10, difference to the default and its 95% interval):
+
+| | SciFact | NFCorpus | FiQA |
+|---|---:|---:|---:|
+| default | 0.719 | 0.358 | 0.376 |
+| V1 | +0.000 (+0.000 to +0.000) | +0.000 (−0.003 to +0.004) | −0.002 (−0.004 to −0.001) |
+| V2 | −0.008 (−0.013 to −0.002) | −0.000 (−0.004 to +0.003) | −0.013 (−0.018 to −0.008) |
+| V3 | −0.023 (−0.034 to −0.013) | −0.008 (−0.013 to −0.002) | −0.034 (−0.043 to −0.025) |
+| B3 | +0.003 (−0.004 to +0.010) | +0.003 (−0.000 to +0.006) | +0.009 (+0.004 to +0.014) |
+
+- **Weighting the vectors down buys nothing on notes and costs on BEIR.** V1
+  fires rarely (BM25's top hit must contain every term) and changes almost
+  nothing anywhere; on set 1 it is +0.006 on tune and −0.005 on held-out.
+  The smoother and per-hit versions lose up to 0.034 on FiQA, where the
+  vectors carry the result.
+- **The keyword gap was mostly set 1's tune half.** With fresh queries the
+  vectors no longer pull good keyword hits down on average, which is the
+  kind of difference 12 to 14 queries per style can show by chance.
+- **FiQA stays open.** By construction a vector-side weight cannot close a
+  gap where the vectors are the better retriever. Sharper keyword weighting
+  (B3) helps all three BEIR sets, FiQA outside noise (0.385, still below
+  0.403), but it lost on both notes tune halves (−0.002 on set 2, −0.007 on
+  set 1), so it was not picked. It is the lead for a next attempt, which
+  would need queries that have not yet informed a decision.
+
 ### Tuning: chunk size and phrase weight
 
 These sweeps ran with plain RRF, before coverage weighting.
@@ -391,6 +468,11 @@ notelight eval notes                                        # tune half, default
 notelight eval notes --max-chars 600 --phrase-boost 4       # one sweep cell
 notelight eval notes --coverage-power 0                     # plain RRF fusion
 notelight eval notes --split heldout                        # the held-out half
+notelight eval notes2                                       # query set 2, tune half
+
+# fusion variants without changing the core (see the script's docstring)
+python scripts/fusion_lab.py notes2 --split tune --parity   # the copy matches the core?
+python scripts/fusion_lab.py notes2 --split tune --cands C0,V1,V2,V3,B3
 ```
 
 Tune on the tune half. Run the held-out half once, for settings chosen

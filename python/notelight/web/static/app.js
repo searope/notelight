@@ -178,8 +178,13 @@ function renderResults(response) {
   results.textContent = "";
   const skipped = response.skipped.map((s) => `${s.folder} skipped: ${s.error}`).join("; ");
   const count = response.results.length;
+  // Same words as the CLI (search.NO_CLOSE_MATCH).
+  const far = response.close_match === false && count
+    ? " No close match: nothing indexed is closely related to this query. These are the nearest chunks."
+    : "";
   showMessage(
-    (count ? `${count} result${count === 1 ? "" : "s"}` : "No results.")
+    (count ? `${count} result${count === 1 ? "" : "s"}.` : "No results.")
+      + far
       + (skipped ? ` (${skipped})` : ""),
     Boolean(skipped) && !count,
   );

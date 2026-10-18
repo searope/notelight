@@ -191,6 +191,10 @@ C++, x64/x86 build tools, Windows SDK).
   SHA-512 + per-file SHA-256); bumping it means new hashes and new
   measurements. Decisions and numbers: design notes, "v2: query embeddings in
   the browser".
+- "No close match": `ModelSpec.match_floor` (0.60 for bge-small) is mirrored
+  as `matchFloor` in `embed.js` (a test checks they agree). A new model or
+  revision needs its own floor from `scripts/measure_match_floor.py`; see the
+  design notes, "No close match".
 - Indexing in the browser: `ingest.js` mirrors `ingest.py` (and ports
   pathspec's gitignore matching) and `indexer.js` mirrors `indexer.py`'s
   caches; change them together with the Python side, then re-run

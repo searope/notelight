@@ -141,6 +141,9 @@ class ModelSpec:
     max_tokens: int = 512
     query_prefix: str = ""
     base_url: str = "https://huggingface.co"
+    #: Cosine below which the best chunk is only loosely related to a query
+    #: ("no close match"); None if not measured for this model.
+    match_floor: float | None = None
 
     @property
     def model_id(self) -> str:
@@ -168,6 +171,9 @@ BGE_SMALL_EN_V15 = ModelSpec(
     dim=384,
     # bge v1.5 recommends this instruction for short queries against passages.
     query_prefix="Represent this sentence for searching relevant passages: ",
+    # Chosen on the notes benchmark's tune split and off-topic queries; see
+    # docs/design-notes.md, "No close match". Mirrored in web-demo/embed.js.
+    match_floor=0.60,
 )
 
 DownloadCallback = Callable[[ModelFile], None]
@@ -342,4 +348,11 @@ def name_for_model_id(model_id: str | None) -> str | None:
         return "bge-small"
     if model_id == HashingEmbedder().model_id:
         return "hashing"
+    return None
+
+
+def match_floor_for(model_id: str | None) -> float | None:
+    """The "no close match" cosine floor for vectors from `model_id`, if known."""
+    if model_id == BGE_SMALL_EN_V15.model_id:
+        return BGE_SMALL_EN_V15.match_floor
     return None

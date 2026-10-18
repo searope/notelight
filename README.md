@@ -83,7 +83,7 @@ re-run takes about as long as starting the CLI (0.5 s for the folder above).
 | Command | What it does |
 |---|---|
 | `notelight index <folder>` | create or update the index for a folder |
-| `notelight search "<query>" [-k 10] [--json] [-f <folder>]` | hybrid search; quote exact phrases: `'"lock file" windows'`; on a terminal the matched words are highlighted and each snippet starts near the first match (`NO_COLOR` turns colour off); `--json` returns path, line range, heading path and text for scripts and agents |
+| `notelight search "<query>" [-k 10] [--json] [-f <folder>]` | hybrid search; quote exact phrases: `'"lock file" windows'`; on a terminal the matched words are highlighted and each snippet starts near the first match (`NO_COLOR` turns colour off); `--json` returns path, line range, heading path and text for scripts and agents; when nothing indexed is close to the query, it says "No close match" above the nearest results ([how it decides](https://github.com/searope/notelight/blob/main/docs/design-notes.md#no-close-match)) |
 | `notelight status [<folder>] [--json]` | list indexed folders, sizes, embedders and generations |
 | `notelight mcp [-f <folder>]...` | run the MCP server over stdio for AI agents ([below](#use-with-claude--cursor)) |
 | `notelight serve [-f <folder>]... [--port 8765] [--open]` | search in your browser on localhost; needs `pip install "notelight[web]"` ([below](#web-ui)) |
@@ -154,7 +154,7 @@ read-only tools:
 
 | Tool | What it returns |
 |---|---|
-| `search(query, k=10, folder=None)` | hits with `location` (`path:line_start-line_end`), heading path, snippet and score; all indexed folders when `folder` is omitted |
+| `search(query, k=10, folder=None)` | hits with `location` (`path:line_start-line_end`), heading path, snippet and score; all indexed folders when `folder` is omitted; `close_match: false` when nothing indexed is closely related to the query |
 | `read_context(location, context=5, folder=None)` | the cited lines plus `context` lines around them, read from disk (PDF and DOCX as extracted text, with PDF pages) |
 | `list_sources()` | the indexed folders, with file and chunk counts |
 | `index_status(folder=None)` | generation, chunks, embedder, size, and whether files changed since the last `notelight index` |

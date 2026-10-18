@@ -6,6 +6,7 @@ import init, {
   type Chunk,
   type Hit,
   type TextChunk,
+  type VectorHit,
   chunkText,
   Index,
   IndexWriter,
@@ -18,6 +19,7 @@ const v: string = version();
 const empty = new Uint8Array();
 const index = new Index(empty, empty, empty, null);
 const bm25: Bm25Hit[] = index.searchBm25("query", 10);
+const nearest: VectorHit[] = index.searchVector(new Float32Array(index.dim), 1);
 const hybrid: Hit[] = index.search("query", new Float32Array(index.dim), 10);
 const rank: number | null = hybrid[0].bm25Rank;
 const chunk: Chunk = index.chunk(bm25[0].id);

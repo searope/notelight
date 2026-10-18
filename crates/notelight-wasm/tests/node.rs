@@ -92,6 +92,21 @@ fn hybrid_search_with_a_vector_reports_vector_ranks() {
 }
 
 #[wasm_bindgen_test]
+fn vector_search_returns_cosines() {
+    let idx = sample();
+    let mut vector = vec![0.0_f32; 384];
+    vector[0] = 1.0;
+    let hits = array(&idx.search_vector(vector.clone(), 3).unwrap());
+    assert_eq!(hits.length(), 3);
+    let rust = idx.hits_vector(&vector, 3).unwrap();
+    for (h, r) in hits.iter().zip(&rust) {
+        assert_eq!(get(&h, "id").as_f64(), Some(f64::from(r.id)));
+        let score = get(&h, "score").as_f64().unwrap();
+        assert!((-1.0..=1.0).contains(&score), "{score}");
+    }
+}
+
+#[wasm_bindgen_test]
 fn same_ranking_as_the_plain_rust_api() {
     // The JS objects carry exactly what the core returned.
     let idx = sample();

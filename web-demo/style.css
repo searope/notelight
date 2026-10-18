@@ -6,6 +6,8 @@
   --accent: #2f5bd3;
   --card: #ffffff;
   --mark: #fff1a8;
+  --warn: #8a5300;
+  --warn-bg: #fff4dc;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
@@ -18,6 +20,8 @@
     --accent: #7d9cff;
     --card: #1e1e21;
     --mark: #5b4d00;
+    --warn: #f0b860;
+    --warn-bg: #3a2c12;
   }
 }
 
@@ -101,6 +105,13 @@ button:disabled { opacity: 0.5; cursor: default; }
 .status { color: var(--muted); min-height: 1.5em; }
 .status.error { color: #c62828; }
 .timing { color: var(--muted); font-size: 0.85rem; min-height: 1.3em; margin: 0; }
+.no-match {
+  color: var(--warn);
+  background: var(--warn-bg);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  margin: 0.5rem 0 0;
+}
 
 .bench {
   background: var(--card);

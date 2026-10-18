@@ -8,6 +8,20 @@ format is detected and rebuilt by `notelight index`.
 
 ## [Unreleased]
 
+### Added
+
+- **"No close match".** When nothing indexed is closely related to a query
+  (the best cosine between the query and any chunk is below 0.60 with
+  bge-small), the CLI, the localhost UI and the browser app say so above the
+  results, which are still shown. `notelight search --json` and the MCP
+  `search` tool return `close_match` (true, false, or null when unknown:
+  keyword-only indexes, the hashing embedder) and `best_similarity`, and the
+  MCP instructions tell agents not to answer from such results.
+  `Searcher.query` returns both in Python (`SearchResults`), and the wasm
+  `Index` gains `searchVector(vector, k)`. The floor was measured on the notes
+  benchmark, off-topic queries and BEIR (`scripts/measure_match_floor.py`;
+  design notes, "No close match").
+
 ### Changed
 
 - **The browser app shows what it is doing.** An activity bar pinned to the

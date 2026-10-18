@@ -14,6 +14,8 @@ from typer.testing import CliRunner
 
 import notelight
 from notelight.cli import app
+from notelight.embed import HashingEmbedder
+from notelight.search import NO_CLOSE_MATCH
 
 runner = CliRunner()
 
@@ -59,6 +61,22 @@ def test_search_highlights_query_words(notes: Path, monkeypatch: pytest.MonkeyPa
     assert "\x1b[" not in runner.invoke(app, args, color=True).output
 
 
+def test_search_says_when_nothing_is_close(notes: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _index(notes)
+    args = ["search", "sourdough starter", "-f", str(notes), "-k", "2"]
+    assert NO_CLOSE_MATCH not in runner.invoke(app, args).output  # hashing has no floor
+    hashing = HashingEmbedder().model_id
+    monkeypatch.setattr(
+        "notelight.search.match_floor_for", lambda model_id: 1.01 if model_id == hashing else None
+    )
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert lines[0] == NO_CLOSE_MATCH and "recipes/bread.txt:" in lines[1]
+    payload = json.loads(runner.invoke(app, [*args, "--json"]).output)
+    assert payload["close_match"] is False and 0 < payload["best_similarity"] < 1.01
+
+
 def test_search_json_output(notes: Path) -> None:
     _index(notes)
     result = runner.invoke(app, ["search", "single owner", "-f", str(notes), "--json"])
@@ -68,6 +86,7 @@ def test_search_json_output(notes: Path) -> None:
     assert top["path"] == "rust/ownership.md"
     assert top["heading_path"] == ["Rust", "Ownership"]
     assert top["location"].startswith("rust/ownership.md:")
+    assert payload["close_match"] is None  # the hashing embedder has no floor
 
 
 @pytest.mark.parametrize("fmt", ["--json", "--text"])

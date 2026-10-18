@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -158,3 +159,11 @@ def test_network_failure_is_a_model_error(tmp_path: Path) -> None:
     )
     with pytest.raises(ModelNotAvailableError, match="failed"):
         ensure_model_files(spec, cache_dir=tmp_path / "cache")
+
+
+def test_browser_embedder_has_the_same_match_floor() -> None:
+    """web-demo/embed.js mirrors `ModelSpec.match_floor` for bge-small."""
+    js = (Path(__file__).parents[1] / "web-demo" / "embed.js").read_text(encoding="utf-8")
+    found = re.search(r"^\s*matchFloor: ([0-9.]+),$", js, flags=re.MULTILINE)
+    assert found is not None
+    assert float(found.group(1)) == BGE_SMALL_EN_V15.match_floor

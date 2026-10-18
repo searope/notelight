@@ -18,7 +18,8 @@ browser.
 
 ## What it does and does not include
 
-- **Included:** opening an index (`Index`), BM25 search (`searchBm25`),
+- **Included:** opening an index (`Index`), BM25 search (`searchBm25`), vector
+  search (`searchVector`),
   hybrid search with a query vector you supply (`search`), stored chunks
   (`chunk`), the chunker the Python indexer uses (`chunkText`), and an
   in-memory index writer (`IndexWriter`). The code is the same Rust core the
@@ -144,6 +145,7 @@ files (`markdown: true`), by blank-line paragraphs otherwise. Text must have
 |---|---|
 | `new Index(manifest, docs, bm25, vectors?)` | open one generation from its file bytes; throws on invalid or mismatched files |
 | `index.searchBm25(text, k)` | `{ id, score }[]` |
+| `index.searchVector(vector, k)` | `{ id, score }[]`, score = cosine; throws for a keyword-only index |
 | `index.search(text, vector \| null, k)` | `{ id, score, bm25Rank, vectorRank }[]`; ranks are 1-based or `null` |
 | `index.chunk(id)` | `{ path, headingPath, lineStart, lineEnd, text }` |
 | `index.length`, `dim`, `embedder`, `hasVectors`, `generation` | from the manifest |

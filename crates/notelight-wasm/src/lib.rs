@@ -62,6 +62,13 @@ export interface Bm25Hit {
   score: number;
 }
 
+/** One vector-search result. */
+export interface VectorHit {
+  id: number;
+  /** Cosine similarity to the query (int8 rescoring; higher is better). */
+  score: number;
+}
+
 /** One hybrid-search result. */
 export interface Hit {
   id: number;
@@ -97,6 +104,15 @@ pub struct Bm25Hit {
     /// Chunk id.
     pub id: u32,
     /// BM25 score.
+    pub score: f32,
+}
+
+/// A vector-search result as JavaScript sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct VectorHit {
+    /// Chunk id.
+    pub id: u32,
+    /// Cosine similarity to the query.
     pub score: f32,
 }
 
@@ -453,6 +469,20 @@ impl Index {
         to_js(&self.hits_bm25(text, k))
     }
 
+    /// Vector search: the `k` chunks most similar to a query embedding, by
+    /// cosine (the candidate search hybrid search uses, `ternary+int8`).
+    ///
+    /// # Errors
+    /// Throws if the index is keyword-only or `vector` has the wrong dimension.
+    #[wasm_bindgen(js_name = searchVector, unchecked_return_type = "VectorHit[]")]
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen copies the array into an owned Vec"
+    )]
+    pub fn search_vector(&self, vector: Vec<f32>, k: usize) -> Result<JsValue, JsError> {
+        to_js(&self.hits_vector(&vector, k).map_err(js_error)?)
+    }
+
     /// Hybrid search. With `vector` null it ranks by BM25 alone (plus
     /// phrase ranking); with a query embedding from the index's embedder it
     /// fuses BM25 and vector results. `vector` may be a `Float32Array` or a
@@ -511,6 +541,19 @@ impl Index {
             .into_iter()
             .map(|(id, score)| Bm25Hit { id, score })
             .collect()
+    }
+
+    /// See [`Self::search_vector`].
+    ///
+    /// # Errors
+    /// See [`IndexReader::search_vector`].
+    pub fn hits_vector(&self, vector: &[f32], k: usize) -> notelight_core::Result<Vec<VectorHit>> {
+        Ok(self
+            .reader
+            .search_vector(vector, k, SearchOpts::default().candidates)?
+            .into_iter()
+            .map(|(id, score)| VectorHit { id, score })
+            .collect())
     }
 
     /// See [`Self::search`].
@@ -631,6 +674,17 @@ mod tests {
         assert_eq!(b.vector_rank, Some(1));
         assert_eq!(b.bm25_rank, None);
         assert!(idx.hits("winget", Some(&[1.0]), 2).is_err());
+    }
+
+    #[test]
+    fn vector_search_returns_cosines() {
+        let idx = index(true);
+        let hits = idx.hits_vector(&[0.0, 0.6, 0.8, 0.0], 2).unwrap();
+        assert_eq!(hits[0].id, 1);
+        assert!((hits[0].score - 0.6).abs() < 0.01, "{hits:?}");
+        assert!(hits[1].score.abs() < 0.01, "{hits:?}");
+        assert!(idx.hits_vector(&[1.0], 1).is_err());
+        assert!(index(false).hits_vector(&[1.0; 4], 1).is_err());
     }
 
     #[test]

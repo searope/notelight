@@ -1,9 +1,15 @@
-"""Snippets and query-term highlighting (`notelight.search`)."""
+"""Snippets, query-term highlighting and close-match reporting (`notelight.search`)."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from notelight import _core
-from notelight.search import match_spans, query_terms, snippet
+from notelight.embed import BGE_SMALL_EN_V15, HashingEmbedder, match_floor_for
+from notelight.indexer import sync
+from notelight.search import Searcher, SearchResults, match_spans, query_terms, snippet
 
 
 def test_tokenize_binding_matches_bm25_rules() -> None:
@@ -60,3 +66,54 @@ def test_snippet_near_the_end_stays_full_width() -> None:
 def test_snippet_without_a_match_is_the_start() -> None:
     text = "filler " * 60
     assert snippet(text, width=80, terms=query_terms("absent")) == snippet(text, width=80)
+
+
+# -- close match ----------------------------------------------------------------
+
+
+def _set_floor(monkeypatch: pytest.MonkeyPatch, floor: float) -> None:
+    """Give the hashing embedder a match floor (only bge-small has a real one)."""
+    hashing = HashingEmbedder().model_id
+    monkeypatch.setattr(
+        "notelight.search.match_floor_for", lambda model_id: floor if model_id == hashing else None
+    )
+
+
+def test_close_match_needs_both_numbers() -> None:
+    assert SearchResults([], best_similarity=0.7, match_floor=0.6).close_match is True
+    assert SearchResults([], best_similarity=0.6, match_floor=0.6).close_match is True
+    assert SearchResults([], best_similarity=0.5, match_floor=0.6).close_match is False
+    assert SearchResults([], best_similarity=None, match_floor=0.6).close_match is None
+    assert SearchResults([], best_similarity=0.5, match_floor=None).close_match is None
+
+
+def test_only_bge_small_has_a_floor() -> None:
+    assert match_floor_for(BGE_SMALL_EN_V15.model_id) == BGE_SMALL_EN_V15.match_floor == 0.60
+    assert match_floor_for(HashingEmbedder().model_id) is None
+    assert match_floor_for(None) is None
+
+
+def test_query_reports_the_best_cosine(notes: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    embedder = HashingEmbedder()
+    sync(notes, embedder)
+    searcher = Searcher(notes, embedder)
+    assert searcher.query("sourdough starter").close_match is None  # no floor: unknown
+
+    _set_floor(monkeypatch, 0.0)
+    found = searcher.query("sourdough starter", k=3)
+    assert found.results == searcher.search("sourdough starter", k=3)
+    vector = embedder.embed_query("sourdough starter")
+    assert found.best_similarity == pytest.approx(searcher._reader.search_vector(vector, k=1)[0][1])
+    assert found.close_match is True
+
+    _set_floor(monkeypatch, 1.01)
+    found = searcher.query("sourdough starter", k=3)
+    assert found.close_match is False
+    assert found.results  # the nearest chunks are still returned
+
+
+def test_keyword_search_has_no_verdict(notes: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_floor(monkeypatch, 1.01)
+    sync(notes, HashingEmbedder())
+    found = Searcher(notes, None).query("sourdough")
+    assert found.results and found.best_similarity is None and found.close_match is None

@@ -237,6 +237,7 @@ async function open(files, source, readMs, storedId = null, meta = null) {
   $("search").hidden = false;
   $("results").replaceChildren();
   $("timing").textContent = "";
+  $("no-match").hidden = true;
   // The search box sits below both ways of getting an index; bring it into
   // view so it is obvious the index is ready to search.
   $("status").textContent += " Search it below.";
@@ -357,6 +358,10 @@ async function search() {
   start = performance.now();
   const hits = index.search(query, vector, k);
   const searchMs = performance.now() - start;
+  // As `Searcher.query` does: the best cosine against the model's floor.
+  const floor = vector ? embedder.spec.matchFloor : null;
+  const best = floor != null && hits.length ? index.searchVector(vector, 1)[0]?.score : null;
+  $("no-match").hidden = !(best != null && best < floor);
   const chunks = hits.map((h) => index.chunk(h.id));
   const readMs = performance.now() - start - searchMs;
 
@@ -688,6 +693,7 @@ async function storedAction(action, meta) {
       $("search").hidden = true;
       $("results").replaceChildren();
       $("timing").textContent = "";
+      $("no-match").hidden = true;
       setStatus("The open index was deleted. Choose another.");
     }
     setIndexStatus(`Deleted the index of ${meta.name}.`);

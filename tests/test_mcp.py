@@ -18,9 +18,9 @@ from mcp_types import TextContent
 from notelight import paths
 from notelight.embed import HashingEmbedder
 from notelight.indexer import CORE_DIR, sync
-from notelight.mcp_server import MAX_CONTEXT_LINES, NotesService, create_server
+from notelight.mcp_server import MAX_CONTEXT_LINES, NotesService, _any_close, create_server
 from notelight.paths import HOME_ENV
-from notelight.search import Searcher, check_staleness
+from notelight.search import Searcher, SearchResults, check_staleness
 
 pytestmark = pytest.mark.anyio
 
@@ -104,6 +104,45 @@ async def test_search_merges_several_folders(indexed: Path, tmp_path: Path) -> N
     assert out["results"][0]["folder"] == str(other.resolve())
     out = await call(service, "search", {"query": "sourdough"})
     assert out["results"][0]["folder"] == str(indexed.resolve())
+
+
+async def test_search_reports_close_match(
+    indexed: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = await call(NotesService(), "search", {"query": "sourdough"})
+    assert out["close_match"] is None  # the hashing embedder has no floor
+    hashing = HashingEmbedder().model_id
+    floor = {"value": 1.01}
+    monkeypatch.setattr(
+        "notelight.search.match_floor_for",
+        lambda model_id: floor["value"] if model_id == hashing else None,
+    )
+    out = await call(NotesService(), "search", {"query": "sourdough", "folder": str(indexed)})
+    assert out["close_match"] is False and out["results"]
+    assert 0 < out["best_similarity"] < 1.01
+    floor["value"] = 0.0
+    out = await call(NotesService(), "search", {"query": "sourdough"})
+    assert out["close_match"] is True
+
+    # Across folders a keyword-only folder could still match: unknown, not False.
+    floor["value"] = 1.01
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "garden.md").write_text("# Garden\n\nTomatoes need sun.\n", encoding="utf-8")
+    sync(other, None)
+    out = await call(NotesService(), "search", {"query": "sourdough"})
+    assert out["close_match"] is None and 0 < out["best_similarity"] < 1.01
+
+
+def test_any_close_across_folders() -> None:
+    def found(close: float | None) -> SearchResults:
+        return SearchResults([], best_similarity=close, match_floor=0.5)
+
+    assert _any_close([found(0.4), found(0.6)]) is True
+    assert _any_close([found(0.6), found(None)]) is True
+    assert _any_close([found(0.4), found(0.3)]) is False
+    assert _any_close([found(0.4), found(None)]) is None
+    assert _any_close([]) is None
 
 
 async def test_search_not_indexed(tmp_path: Path) -> None:

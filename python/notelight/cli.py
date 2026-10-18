@@ -20,6 +20,7 @@ from notelight.embed import EMBEDDER_NAMES, Embedder, ModelFile, make_embedder, 
 from notelight.errors import IndexNotFoundError, NotelightError
 from notelight.indexer import SyncStats, sync
 from notelight.search import (
+    NO_CLOSE_MATCH,
     IndexInfo,
     Searcher,
     describe_index,
@@ -208,14 +209,17 @@ def search(
             )
         emb = _embedder(name, offline)
         searcher = Searcher(target, emb) if emb is not None else probe
-        results = searcher.search(query, k=k)
+        found = searcher.query(query, k=k)
     except NotelightError as e:
         _fail(str(e), code=2 if isinstance(e, IndexNotFoundError) else 1)
 
+    results = found.results
     if as_json:
         payload = {
             "query": query,
             "folder": str(searcher.folder),
+            "close_match": found.close_match,
+            "best_similarity": found.best_similarity,
             "results": [r.to_dict() for r in results],
         }
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -225,6 +229,8 @@ def search(
         return
     # Colour only on a terminal (click strips it from pipes), and never with NO_COLOR.
     color = False if os.environ.get("NO_COLOR") else None
+    if found.close_match is False:
+        typer.secho(NO_CLOSE_MATCH, fg=typer.colors.YELLOW, color=color)
     terms = query_terms(query)
     for n, r in enumerate(results, 1):
         heading = _highlight(" > ".join(r.heading_path), terms)

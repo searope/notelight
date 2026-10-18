@@ -44,6 +44,7 @@ from notelight.ingest import DOCUMENT_SUFFIXES, max_bytes
 from notelight.search import (
     IndexInfo,
     Searcher,
+    SearchResults,
     check_staleness,
     describe_index,
     format_pages,
@@ -87,6 +88,9 @@ as in `report.pdf:40-52 (p. 3)`.
 Use `read_context` with a location to read the surrounding lines from disk.
 `list_sources` shows which folders are searchable; `index_status` shows whether an
 index is out of date (the user refreshes it with `notelight index <folder>`).
+When `search` returns `close_match: false`, nothing indexed is closely related to
+the query: say the notes do not seem to cover it rather than answering from the
+nearest results.
 """
 
 _READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
@@ -135,6 +139,17 @@ class SearchResponse(BaseModel):
     skipped: list[SkippedFolder] = Field(
         default_factory=list,
         description="Folders left out of an all-folder search because they failed.",
+    )
+    close_match: bool | None = Field(
+        default=None,
+        description="False when no indexed chunk is closely related to the query, so the "
+        "results are only the nearest ones; true when one is; null when unknown "
+        "(keyword-only indexes).",
+    )
+    best_similarity: float | None = Field(
+        default=None,
+        description="Highest cosine similarity between the query and any chunk; null "
+        "without embeddings.",
     )
 
 
@@ -338,18 +353,26 @@ class NotesService:
             raise ToolError(f"k must be between 1 and {MAX_K}")
         if folder is not None:
             searcher = self.searcher(self._resolve_folder(folder))
-            return SearchResponse(query=query, results=self._search_one(searcher, query, k))
+            hits, found = self._search_one(searcher, query, k)
+            return SearchResponse(
+                query=query,
+                results=hits,
+                close_match=found.close_match,
+                best_similarity=found.best_similarity,
+            )
         targets = self._usable_folders()
         if not targets:
             raise ToolError("no folder is indexed yet; run `notelight index <folder>` first")
         ranked: list[tuple[int, int, SearchHit]] = []
         skipped: list[SkippedFolder] = []
+        searched: list[SearchResults] = []
         for order, target in enumerate(targets):
             try:
-                hits = self._search_one(self.searcher(target), query, k)
+                hits, found = self._search_one(self.searcher(target), query, k)
             except (ToolError, NotelightError, OSError, ValueError) as e:
                 skipped.append(SkippedFolder(folder=str(target), error=str(e)))
                 continue
+            searched.append(found)
             ranked.extend((rank, order, hit) for rank, hit in enumerate(hits))
         if not ranked and skipped and len(skipped) == len(targets):
             raise ToolError(
@@ -359,13 +382,20 @@ class NotesService:
         # Interleave by per-folder rank, so every folder's best hits reach the
         # top whatever its score scale; within one rank, the stronger hit first.
         ranked.sort(key=lambda t: (t[0], -t[2].score, t[1]))
+        known = [f.best_similarity for f in searched if f.best_similarity is not None]
         return SearchResponse(
-            query=query, results=[hit for _, _, hit in ranked[:k]], skipped=skipped
+            query=query,
+            results=[hit for _, _, hit in ranked[:k]],
+            skipped=skipped,
+            close_match=_any_close(searched),
+            best_similarity=max(known) if known else None,
         )
 
-    def _search_one(self, searcher: Searcher, query: str, k: int) -> list[SearchHit]:
+    def _search_one(
+        self, searcher: Searcher, query: str, k: int
+    ) -> tuple[list[SearchHit], SearchResults]:
         try:
-            results = searcher.search(query, k=k)
+            found = searcher.query(query, k=k)
         except NotelightError as e:
             raise ToolError(str(e)) from e
         return [
@@ -382,8 +412,8 @@ class NotesService:
                 page_end=r.page_end,
                 score=r.score,
             )
-            for r in results
-        ]
+            for r in found.results
+        ], found
 
     # -- reading files -------------------------------------------------------
     def read_context(
@@ -518,6 +548,17 @@ class NotesService:
             hint=hint,
             error=info.error,
         )
+
+
+def _any_close(searched: list[SearchResults]) -> bool | None:
+    """Across folders: True if any has a close match, False if every folder
+    knows it has none, None otherwise (a keyword-only folder might match)."""
+    verdicts = [f.close_match for f in searched]
+    if any(verdicts):
+        return True
+    if verdicts and all(v is False for v in verdicts):
+        return False
+    return None
 
 
 def _parse_location(location: str) -> tuple[str, int | None, int | None]:

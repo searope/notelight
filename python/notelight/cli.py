@@ -356,8 +356,9 @@ def eval_(
     datasets: Annotated[
         list[str] | None,
         typer.Argument(
-            help="BEIR dataset names (scifact, nfcorpus, fiqa), notes (short queries over "
-            "notelight's own docs, bundled), or folders in the BEIR layout. "
+            help="BEIR dataset names (scifact, nfcorpus, fiqa), notes or notes2 (query sets 1 "
+            "and 2 of short queries over notelight's own docs, bundled), or folders in the "
+            "BEIR layout. "
             "Default: the three BEIR datasets.",
             show_default=False,
         ),

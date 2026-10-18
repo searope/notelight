@@ -296,20 +296,31 @@ impl<B: AsRef<[u8]>> Bm25<B> {
     /// tokenized). A binary search per term over its sorted postings.
     #[must_use]
     pub fn contains_all(&self, doc: u32, terms: &[String]) -> bool {
+        terms.iter().all(|term| self.contains(doc, term))
+    }
+
+    /// How many of `terms` (already tokenized) document `doc` contains. A
+    /// term listed twice counts twice, so pass distinct terms.
+    #[must_use]
+    pub fn count_contained(&self, doc: u32, terms: &[String]) -> usize {
+        terms.iter().filter(|term| self.contains(doc, term)).count()
+    }
+
+    /// Whether document `doc` contains `term`: a binary search over its
+    /// postings, which are sorted by document id.
+    fn contains(&self, doc: u32, term: &str) -> bool {
         let data = self.bytes.as_ref();
-        terms.iter().all(|term| {
-            self.find_term(term).is_some_and(|t| {
-                let (mut lo, mut hi) = (self.post_offset(t), self.post_offset(t + 1));
-                while lo < hi {
-                    let mid = lo + (hi - lo) / 2;
-                    match u32_at(data, self.postings_at + 8 * mid).cmp(&doc) {
-                        std::cmp::Ordering::Less => lo = mid + 1,
-                        std::cmp::Ordering::Greater => hi = mid,
-                        std::cmp::Ordering::Equal => return true,
-                    }
+        self.find_term(term).is_some_and(|t| {
+            let (mut lo, mut hi) = (self.post_offset(t), self.post_offset(t + 1));
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2;
+                match u32_at(data, self.postings_at + 8 * mid).cmp(&doc) {
+                    std::cmp::Ordering::Less => lo = mid + 1,
+                    std::cmp::Ordering::Greater => hi = mid,
+                    std::cmp::Ordering::Equal => return true,
                 }
-                false
-            })
+            }
+            false
         })
     }
 

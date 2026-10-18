@@ -80,7 +80,9 @@ how close.
 
 BM25 scores and cosine similarities are on different scales, and the right
 weighting differs per corpus. RRF combines ranks instead of scores, needs no
-tuning, and rewards chunks that both retrievers agree on.
+tuning, and rewards chunks that both retrievers agree on. (Later, each BM25
+hit's share was weighted by the query terms it contains; see "Fusion
+decisions".)
 
 ### Structure-aware chunking
 
@@ -563,7 +565,81 @@ interval 0.025 to 0.126), and turning the phrase bonus off loses 0.018 to
 paraphrase, where BM25 contributes nothing and halves what the vectors find
 (5 queries per half, too few to act on). A tuned RRF weight or a
 query-style switch would be the thing to test if more paraphrase queries
-show the same.
+show the same. (A weight that needs no tuning was tested later and kept;
+see "Fusion decisions".)
+
+## Fusion decisions
+
+### Keyword hits count by the query terms they contain
+
+Plain RRF gave a BM25 hit as much say as a vector hit at the same rank. On a
+query that shares no word with its answer, BM25 still returns up to 50 hits,
+each on an incidental word, and those ranks pushed the right vector hits out:
+on the notes benchmark's paraphrases, hybrid scored 0.082 nDCG@10 on
+held-out against 0.257 for the vectors alone. The BM25 score cannot flag
+these hits (their top scores, 5.6 to 9.2, overlap real keyword hits), but
+the share of query terms a hit contains can: 25 to 40% for the best
+paraphrase hit on the tune half, at least 50% for every other tune query.
+
+So `IndexReader::search` now passes each BM25 hit to `fuse::rrf_weighted`
+with weight `coverage_weight(matched, total, 2) = (matched / total)²`, where
+the chunk contains `matched` of the query's `total` distinct terms (terms the
+corpus does not know count as missing). Vector hits keep weight 1. Properties
+that make it a safe default:
+
+- **No tuning per corpus.** The weight depends only on the query and the
+  chunk, and its exponent was fixed once on the notes tune half.
+- **Full matches are unchanged.** A chunk with every term counts as before,
+  so single-term queries and identifiers rank exactly as with plain RRF.
+- **Keyword-only search is unchanged.** The weighting applies only when a
+  query vector is given: it balances two retrievers, and alone BM25's order
+  stands.
+- **Cheap.** `Bm25::count_contained` is one binary search per distinct
+  query term over that term's postings, for at most 50 hits: 0.02 to
+  0.06 ms per query on BEIR.
+
+`SearchOpts::coverage_power` holds the exponent (0 is plain RRF), and
+`notelight eval --coverage-power` sweeps it.
+
+### How it was chosen
+
+The notes benchmark's discipline applied: the diagnosis and seven candidates
+were written down before any candidate ran, together with a pick rule
+(highest tune nDCG@10 that lowers no query style by more than 0.02) and the
+ship rule (the held-out paired 95% interval excludes zero and agrees with
+tune, and no BEIR dataset's hybrid nDCG@10 drops beyond noise, judged by
+its paired 95% interval). The candidates were RRF k of 20 and 100, a fixed
+BM25 weight of 0.5, coverage-weighted hits (linear and squared), a per-hit
+gate (count a hit only if it has half the terms), and a per-query gate (drop
+BM25 when its best hit has less than half). They were evaluated with a
+Python copy of `IndexReader::search` that reproduced the core's top 10 on
+every notes and BEIR query.
+
+On tune, coverage² scored 0.688 (plain RRF 0.663; linear coverage 0.682;
+the gates 0.681 and 0.674; k = 20 0.672; k = 100 changed nothing; BM25
+weight 0.5 lost 0.004). On held-out, run once for it and plain RRF, it
+scored 0.759 against 0.715 (+0.045, interval +0.012 to +0.083; 14 queries
+better, 7 worse). Paraphrases went from 0.082 to 0.237, keywords from 0.833
+to 0.890, questions from 0.659 to 0.684; phrases stayed (0.907 to 0.906). On
+BEIR, which played no part in the choice, hybrid improved on all three
+datasets: SciFact +0.006 (within noise), NFCorpus +0.008, FiQA +0.025. The
+held-out lead of hybrid over BM25 alone is now outside noise (+0.092, interval
+0.045 to 0.143); with plain RRF it was not. The full tables are in
+`docs/results.md`, "Fusion: weighting keyword hits by coverage".
+
+### What did not work, and what is left
+
+- **Changing RRF's k** hardly matters at these list lengths: k = 100 changed
+  no tune query, k = 20 helped five questions a little.
+- **A fixed lower BM25 weight** costs keyword and phrase queries what it
+  saves on paraphrases: hybrid fell to 0.659 on tune.
+- **Query-level switches** (drop BM25 when its best hit is weak) fix
+  paraphrases and nothing else, and need a threshold.
+- **Left open:** on FiQA, hybrid (0.376) is still below the vectors alone
+  (0.403), and on the notes tune half keyword queries still score lower
+  fused (0.749) than with BM25 alone (0.827), where the vectors dilute good
+  keyword hits. A weight for the vector side would be the next thing to try,
+  with new queries, since this tune half has now informed one decision more.
 
 
 ## v2 spike: the core in the browser
@@ -1273,8 +1349,8 @@ practice the package was created with a placeholder version,
 `0.0.0-stage` ("Temporary package placeholder for staged publishing"), and
 the trusted publisher could then be attached before any real version
 existed, so a workflow publish with provenance was possible for the first
-version too. The placeholder stays in the version list; deprecate it
-(`npm deprecate`) rather than unpublish it.
+version too. The placeholder stays in the version list, deprecated
+(`npm deprecate`) rather than unpublished.
 
 What happened for 0.2.0 (2026-10-17): it was published by hand from the
 tarball the `workflow_dispatch` run built, seconds before the tag's

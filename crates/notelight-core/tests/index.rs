@@ -102,6 +102,48 @@ fn hybrid_search_fuses_both_retrievers() {
 }
 
 #[test]
+fn keyword_hits_count_by_the_share_of_terms_they_contain() {
+    let dir = tempfile::tempdir().unwrap();
+    write_index(dir.path(), 16);
+    let r = IndexReader::open(dir.path(), OpenOptions::default()).unwrap();
+    // One result per retriever: BM25 finds chunk 0 on "restart" alone (1 of
+    // 3 terms), the vector points at chunk 3.
+    let one = SearchOpts {
+        k: 1,
+        depth: 1,
+        ..SearchOpts::default()
+    };
+    let plain = SearchOpts {
+        coverage_power: 0.0,
+        ..one
+    };
+    let q = one_hot(3, 16);
+    // Plain RRF: two first places tie, and the lower id wins.
+    assert_eq!(
+        ids(&r.search("restart zebra yak", Some(&q), &plain).unwrap()),
+        [0]
+    );
+    // Weighted: chunk 0 counts (1/3)^2 of a first place.
+    let hits = r.search("restart zebra yak", Some(&q), &one).unwrap();
+    assert_eq!(ids(&hits), [3]);
+    // A hit with every term counts fully, so nothing changes.
+    assert_eq!(
+        r.search("winget restart", Some(&q), &one).unwrap(),
+        r.search("winget restart", Some(&q), &plain).unwrap()
+    );
+    // Without vectors BM25's order stands.
+    let all = SearchOpts::default();
+    let no_weights = SearchOpts {
+        coverage_power: 0.0,
+        ..all
+    };
+    assert_eq!(
+        r.search("install debian zebra", None, &all).unwrap(),
+        r.search("install debian zebra", None, &no_weights).unwrap()
+    );
+}
+
+#[test]
 fn mmap_and_owned_reads_agree() {
     let dir = tempfile::tempdir().unwrap();
     write_index(dir.path(), 16);

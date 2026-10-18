@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use notelight_core::bm25::{Bm25, Bm25Builder, Bm25Params};
 use notelight_core::chunk::{ChunkOpts, chunk_text};
+use notelight_core::fuse::{coverage_weight, rrf_weighted};
 use notelight_core::phrase::{PhraseQuery, contains_sequence};
 use notelight_core::quant::{
     TERNARY_THRESHOLD, dot_f32_i8, hamming, l2_normalized, quantize_binary, quantize_int8,
@@ -172,7 +173,68 @@ proptest! {
         for (i, d) in docs.iter().enumerate() {
             let expected = terms.iter().all(|t| d.contains(t));
             prop_assert_eq!(index.contains_all(i as u32, &terms), expected);
+            let count = terms.iter().filter(|t| d.contains(t)).count();
+            prop_assert_eq!(index.count_contained(i as u32, &terms), count);
         }
+    }
+
+    #[test]
+    fn weighted_rrf_matches_a_naive_reference(
+        lists in prop::collection::vec(
+            prop::collection::vec((0u32..20, 0u8..=4), 0..15), 0..4),
+        k in 1u8..80,
+        limit in 0usize..25,
+    ) {
+        // Weights in quarters, so sums in any order are exact.
+        let lists: Vec<Vec<(u32, f32)>> = lists
+            .iter()
+            .map(|l| l.iter().map(|&(id, w)| (id, f32::from(w) / 4.0)).collect())
+            .collect();
+        let k = f32::from(k);
+        let mut reference: HashMap<u32, f64> = HashMap::new();
+        for list in &lists {
+            for (rank, &(id, w)) in list.iter().enumerate() {
+                // Only an id's first (best) entry in a list counts.
+                if list[..rank].iter().all(|&(prior, _)| prior != id) {
+                    *reference.entry(id).or_default() +=
+                        f64::from(w) / (f64::from(k) + rank as f64 + 1.0);
+                }
+            }
+        }
+        let refs: Vec<&[(u32, f32)]> = lists.iter().map(Vec::as_slice).collect();
+        let fused = rrf_weighted(&refs, k, limit);
+        prop_assert_eq!(fused.len(), reference.len().min(limit));
+        for pair in fused.windows(2) {
+            // Best first, ties by id.
+            prop_assert!(pair[0].1.total_cmp(&pair[1].1).then(pair[1].0.cmp(&pair[0].0)).is_gt());
+        }
+        for &(id, score) in &fused {
+            let expected = reference[&id];
+            prop_assert!((f64::from(score) - expected).abs() <= 1e-6, "{id}: {score} vs {expected}");
+        }
+        // Whatever was cut ranks no higher than the last one kept.
+        if let Some(&(_, last)) = fused.last() {
+            let kept: Vec<u32> = fused.iter().map(|f| f.0).collect();
+            for (id, &score) in &reference {
+                if !kept.contains(id) {
+                    prop_assert!(score <= f64::from(last) + 1e-6);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn coverage_weight_is_monotone_and_bounded(
+        total in 0usize..20,
+        a in 0usize..20,
+        b in 0usize..20,
+        power in 0.0f32..4.0,
+    ) {
+        let (lo, hi) = (a.min(b).min(total), a.max(b).min(total));
+        let (wl, wh) = (coverage_weight(lo, total, power), coverage_weight(hi, total, power));
+        prop_assert!((0.0..=1.0).contains(&wl) && (0.0..=1.0).contains(&wh));
+        prop_assert!(wl <= wh);
+        prop_assert!((coverage_weight(total, total, power) - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]

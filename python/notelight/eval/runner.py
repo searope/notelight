@@ -52,11 +52,15 @@ F32 = npt.NDArray[np.float32]
 #: `IndexReader.search`'s default phrase bonus (the Rust core's `DEFAULT_PHRASE_BOOST`).
 DEFAULT_PHRASE_BOOST = 1.0
 
+#: `IndexReader.search`'s default weighting of BM25 hits by query-term
+#: coverage (the Rust core's `DEFAULT_COVERAGE_POWER`).
+DEFAULT_COVERAGE_POWER = 2.0
+
 #: Every method `evaluate` can run, in report order. `f32` is exact cosine
 #: similarity in NumPy (the quality ceiling for the vector methods); the four
 #: quantized modes are the Rust core's `VectorMode`s; `bm25` is keyword search
 #: alone; `hybrid` is what `notelight search` does: BM25 and ternary+int8,
-#: fused with reciprocal rank fusion.
+#: fused with reciprocal rank fusion, BM25 hits weighted by term coverage.
 METHODS: tuple[str, ...] = ("f32", *_core.VECTOR_MODES, "bm25", "hybrid")
 
 #: Searches implemented both in Rust and in NumPy (`NumpyVectors`).
@@ -119,6 +123,8 @@ class DatasetResult:
     candidates: int
     #: Hybrid bonus for query terms in order, as passed to `evaluate`.
     phrase_boost: float = DEFAULT_PHRASE_BOOST
+    #: Hybrid exponent for BM25 term coverage, as passed to `evaluate`.
+    coverage_power: float = DEFAULT_COVERAGE_POWER
     methods: list[MethodResult] = field(default_factory=list)
     baseline: list[BaselineRow] = field(default_factory=list)
 
@@ -280,6 +286,7 @@ def evaluate(
     candidates: int = 200,
     depth: int = 50,
     phrase_boost: float = DEFAULT_PHRASE_BOOST,
+    coverage_power: float = DEFAULT_COVERAGE_POWER,
     max_queries: int | None = None,
     baseline: bool = True,
     cache_dir: Path | None = None,
@@ -289,8 +296,10 @@ def evaluate(
 
     `candidates` is the number of binary or ternary candidates re-scored with
     int8 codes, `depth` the number of results each retriever contributes
-    to hybrid fusion, and `phrase_boost` the hybrid bonus for query terms in
-    order (0 turns it off); the defaults are the ones `notelight search` uses.
+    to hybrid fusion, `phrase_boost` the hybrid bonus for query terms in
+    order (0 turns it off), and `coverage_power` how strongly a BM25 hit's
+    share of fusion depends on the query terms it contains (0 for plain RRF);
+    the defaults are the ones `notelight search` uses.
     `max_queries` evaluates only the first queries, for quick runs. With
     `baseline`, the searches in `BASELINE_SEARCHES` also run in NumPy.
 
@@ -314,7 +323,12 @@ def evaluate(
             return [i for i, _ in reader.search_bm25(text, k)]
         if method == "hybrid":
             hits = reader.search(
-                text, vec if has_vec else None, k=k, depth=depth, phrase_boost=phrase_boost
+                text,
+                vec if has_vec else None,
+                k=k,
+                depth=depth,
+                phrase_boost=phrase_boost,
+                coverage_power=coverage_power,
             )
             return [h.id for h in hits]
         if not has_vec:
@@ -332,6 +346,7 @@ def evaluate(
         k=k,
         candidates=candidates,
         phrase_boost=phrase_boost,
+        coverage_power=coverage_power,
     )
     if not query_ids:
         return result

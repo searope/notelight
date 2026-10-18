@@ -8,7 +8,7 @@ use super::{
 };
 use crate::bm25::Bm25;
 use crate::error::{Error, Result};
-use crate::fuse::{DEFAULT_RRF_K, rrf};
+use crate::fuse::{DEFAULT_COVERAGE_POWER, DEFAULT_RRF_K, coverage_weight, rrf_weighted};
 use crate::phrase::{PhraseQuery, match_terms};
 use crate::tokenize::tokenize;
 use crate::vectors::{VectorMode, Vectors};
@@ -46,6 +46,12 @@ pub struct SearchOpts {
     /// added to its fused score. 0 turns the bonus off. Quoted phrases are
     /// applied whatever this is; see [`crate::phrase`].
     pub phrase_boost: f32,
+    /// When fusing with vectors, each BM25 hit counts
+    /// `(matched / total).powf(coverage_power)` of a full entry, where the
+    /// chunk contains `matched` of the query's `total` distinct terms; see
+    /// [`crate::fuse::coverage_weight`]. 0 gives plain RRF. Keyword-only
+    /// search keeps BM25's order whatever this is.
+    pub coverage_power: f32,
 }
 
 impl Default for SearchOpts {
@@ -56,6 +62,7 @@ impl Default for SearchOpts {
             candidates: 200,
             rrf_k: DEFAULT_RRF_K,
             phrase_boost: DEFAULT_PHRASE_BOOST,
+            coverage_power: DEFAULT_COVERAGE_POWER,
         }
     }
 }
@@ -266,6 +273,10 @@ impl IndexReader {
     /// Hybrid search: BM25 and (when `query_vec` is given) vector results,
     /// fused with reciprocal rank fusion, then adjusted for phrases.
     ///
+    /// With vectors, a BM25 hit's share of the fusion depends on how many of
+    /// the query's terms it contains ([`SearchOpts::coverage_power`]), so
+    /// hits on one incidental word do not crowd out the vector results.
+    ///
     /// Chunks that contain every quoted phrase in `query_text` come first;
     /// chunks with all query terms in order get [`SearchOpts::phrase_boost`].
     /// Only the fused candidates (at most `2 * depth`) are checked, so a
@@ -281,8 +292,10 @@ impl IndexReader {
         opts: &SearchOpts,
     ) -> Result<Vec<Hit>> {
         let depth = opts.depth.max(opts.k);
+        let query = PhraseQuery::parse(query_text);
         let bm25_ids: Vec<u32> = self
-            .search_bm25(query_text, depth)
+            .bm25
+            .search_tokens(&query.terms, depth)
             .into_iter()
             .map(|(id, _)| id)
             .collect();
@@ -295,14 +308,34 @@ impl IndexReader {
             None => Vec::new(),
         };
 
-        let query = PhraseQuery::parse(query_text);
+        // Weigh each BM25 hit by the share of the query's terms it contains,
+        // but only against vectors: alone, BM25's own order stands.
+        let weigh = query_vec.is_some() && opts.coverage_power != 0.0;
+        let mut distinct = query.terms.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        let bm25_weighted: Vec<(u32, f32)> = bm25_ids
+            .iter()
+            .map(|&id| {
+                let weight = if weigh {
+                    let matched = self.bm25.count_contained(id, &distinct);
+                    coverage_weight(matched, distinct.len(), opts.coverage_power)
+                } else {
+                    1.0
+                };
+                (id, weight)
+            })
+            .collect();
+        let vec_weighted: Vec<(u32, f32)> = vec_ids.iter().map(|&id| (id, 1.0)).collect();
+
         let phrases = query.has_quoted() || (query.has_sequence() && opts.phrase_boost > 0.0);
         // Without phrases, fusion can stop at k; with them, any candidate may move up.
         let limit = if phrases { usize::MAX } else { opts.k };
-        let mut fused: Vec<(u32, f32, bool)> = rrf(&[&bm25_ids, &vec_ids], opts.rrf_k, limit)
-            .into_iter()
-            .map(|(id, score)| (id, score, false))
-            .collect();
+        let mut fused: Vec<(u32, f32, bool)> =
+            rrf_weighted(&[&bm25_weighted, &vec_weighted], opts.rrf_k, limit)
+                .into_iter()
+                .map(|(id, score)| (id, score, false))
+                .collect();
         if phrases {
             let bonus = opts.phrase_boost / (opts.rrf_k + 1.0);
             for (id, score, quoted) in &mut fused {

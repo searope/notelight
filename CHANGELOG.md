@@ -8,21 +8,35 @@ format is detected and rebuilt by `notelight index`.
 
 ## [Unreleased]
 
-### Added
+### Fixed
 
-- **"No close match".** When nothing indexed is closely related to a query
-  (the best cosine between the query and any chunk is below 0.60 with
-  bge-small), the CLI, the localhost UI and the browser app say so above the
-  results, which are still shown. `notelight search --json` and the MCP
-  `search` tool return `close_match` (true, false, or null when unknown:
-  keyword-only indexes, the hashing embedder) and `best_similarity`, and the
-  MCP instructions tell agents not to answer from such results.
-  `Searcher.query` returns both in Python (`SearchResults`), and the wasm
-  `Index` gains `searchVector(vector, k)`. The floor was measured on the notes
-  benchmark, off-topic queries and BEIR (`scripts/measure_match_floor.py`;
-  design notes, "No close match").
+- **Browser app after a deploy.** GitHub Pages lets browsers reuse each file
+  for 10 minutes (`Cache-Control: max-age=600`), so a returning visitor could
+  get the new `index.html` with an old `app.js`. The page's service worker
+  (`coi-sw.js`) now fetches same-origin files with `cache: "no-cache"`, so
+  every load revalidates them by ETag: unchanged files are a 304 with no
+  body, changed ones are fetched. Cross-origin requests (the model) are
+  untouched.
 
 ### Changed
+
+- **Hybrid search weighs each keyword hit by the query terms it contains.**
+  Fusion used to give a BM25 hit on one incidental word as much say as a
+  vector hit at the same rank, so queries that share no word with their
+  answer lost the vector results (paraphrases on the notes benchmark: 0.082
+  nDCG@10 against 0.257 for vectors alone). Each BM25 hit now adds
+  `(matched / total)² / (60 + rank)`, where it contains `matched` of the
+  query's `total` distinct terms. Held-out notes benchmark nDCG@10 0.715 ->
+  0.759 (95% CI of the difference +0.012 to +0.083); BEIR hybrid SciFact
+  0.712 -> 0.719, NFCorpus 0.350 -> 0.358, FiQA 0.351 -> 0.376. It costs
+  0.02 to 0.06 ms per query. Keyword-only search is unchanged. It is in the
+  Rust core, so the CLI, MCP server, web UI, browser app and npm package all
+  get it. New `SearchOpts::coverage_power` (Rust; adding a field breaks
+  struct literals that list every field), `coverage_power=` on
+  `IndexReader.search` (Python) and `notelight eval --coverage-power` (0 is
+  plain RRF); new `fuse::rrf_weighted`, `fuse::coverage_weight` and
+  `Bm25::count_contained`. See `docs/results.md`, "Fusion: weighting keyword
+  hits by coverage", for the candidates that lost.
 
 - **The browser app shows what it is doing.** An activity bar pinned to the
   top of the window, with a spinner and a progress bar when the size is
@@ -37,6 +51,18 @@ format is detected and rebuilt by `notelight index`.
   page for the whole first download.
 
 ### Added
+
+- **"No close match".** When nothing indexed is closely related to a query
+  (the best cosine between the query and any chunk is below 0.60 with
+  bge-small), the CLI, the localhost UI and the browser app say so above the
+  results, which are still shown. `notelight search --json` and the MCP
+  `search` tool return `close_match` (true, false, or null when unknown:
+  keyword-only indexes, the hashing embedder) and `best_similarity`, and the
+  MCP instructions tell agents not to answer from such results.
+  `Searcher.query` returns both in Python (`SearchResults`), and the wasm
+  `Index` gains `searchVector(vector, k)`. The floor was measured on the notes
+  benchmark, off-topic queries and BEIR (`scripts/measure_match_floor.py`;
+  design notes, "No close match").
 
 - **PDFs in the browser app.** A folder indexed in the page now includes the
   text of its PDFs, extracted in the indexing worker with pdf.js 6.3.289

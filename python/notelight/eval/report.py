@@ -83,6 +83,7 @@ def format_markdown(results: Sequence[DatasetResult]) -> str:
     sizes = ", ".join(f"{r.dataset} {r.docs:,} docs / {r.queries} queries" for r in results)
     parts.append(
         f"Embedder `{results[0].embedder}`; {sizes}; {results[0].candidates} candidates "
-        f"re-scored; hybrid phrase_boost {results[0].phrase_boost:g}."
+        f"re-scored; hybrid phrase_boost {results[0].phrase_boost:g}, "
+        f"coverage_power {results[0].coverage_power:g}."
     )
     return "\n\n".join(parts) + "\n"

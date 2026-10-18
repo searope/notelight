@@ -318,17 +318,17 @@ def test_evaluate_caches_embeddings_and_index(beir_folder: Path, tmp_path: Path)
     assert result.queries == N_QUERIES
 
 
-def test_evaluate_passes_phrase_boost_to_hybrid(
+def test_evaluate_passes_phrase_boost_and_coverage_power_to_hybrid(
     beir_folder: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    seen: list[float] = []
+    seen: list[tuple[float, float]] = []
 
     class SpyReader:
         def __init__(self, inner: _core.IndexReader) -> None:
             self._inner = inner
 
         def search(self, *args: Any, **kwargs: Any) -> list[_core.Hit]:
-            seen.append(kwargs["phrase_boost"])
+            seen.append((kwargs["phrase_boost"], kwargs["coverage_power"]))
             return self._inner.search(*args, **kwargs)
 
         def __getattr__(self, name: str) -> Any:
@@ -339,7 +339,7 @@ def test_evaluate_passes_phrase_boost_to_hybrid(
         runner, "_open_or_build_index", lambda *a, **kw: SpyReader(real_open(*a, **kw))
     )
     ds = load_beir(beir_folder)
-    for boost in (0.0, 2.5):
+    for boost, power in ((0.0, 0.0), (2.5, 1.0)):
         result = evaluate(
             ds,
             HashingEmbedder(64),
@@ -347,9 +347,11 @@ def test_evaluate_passes_phrase_boost_to_hybrid(
             baseline=False,
             cache_dir=tmp_path / "cache",
             phrase_boost=boost,
+            coverage_power=power,
         )
         assert 0.0 <= result.method("hybrid").ndcg <= 1.0
-    assert set(seen) == {0.0, 2.5}
+        assert result.coverage_power == power
+    assert set(seen) == {(0.0, 0.0), (2.5, 1.0)}
 
 
 def test_evaluate_rejects_unknown_methods(beir_folder: Path) -> None:

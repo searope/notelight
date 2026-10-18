@@ -321,12 +321,14 @@ recall@10, latency and the setup):
 | Binary candidates + int8 rescore | 0.703 | 0.341 | 0.399 |
 | **Ternary candidates + int8 rescore (default)** | 0.711 | 0.342 | 0.403 |
 | BM25 alone | 0.678 | 0.305 | 0.238 |
-| **Hybrid: BM25 + vectors, RRF (`notelight search`)** | 0.712 | 0.350 | 0.351 |
+| **Hybrid: BM25 + vectors, RRF (`notelight search`)** | 0.719 | 0.358 | 0.376 |
 
 The default vector search, ternary candidates re-scored with int8, matches
 exhaustive int8 to three decimals and is within 0.002 of exact float32
-search; binary candidates lose up to 0.01. Hybrid fusion helps where keywords
-are strong (NFCorpus) and hurts where they are weak (FiQA). Against a NumPy
+search; binary candidates lose up to 0.01. Hybrid fusion beats both
+retrievers where keywords are strong (SciFact, NFCorpus) and costs 0.027
+where they are weak (FiQA), half what it cost before keyword hits were
+weighted by the query terms they contain. Against a NumPy
 implementation of the same quantized searches, the Rust core returns identical
 top-10 lists; its two-stage searches are 7 to 19x faster (10 to 19x for the
 ternary default), while NumPy's multi-threaded BLAS still wins the
@@ -344,12 +346,17 @@ held-out half, with the defaults:
 |---|---:|---:|
 | Ternary candidates + int8 rescore | 0.639 | 0.756 |
 | BM25 alone | 0.667 | 0.692 |
-| **Hybrid (`notelight search`)** | **0.715** | **0.769** |
+| **Hybrid (`notelight search`)** | **0.759** | **0.814** |
 
 Here keywords matter more than on BEIR: BM25 beats the embeddings on both
-halves, and hybrid scores highest (its lead over the embeddings is clear;
-over BM25 alone it is within noise). A sweep of chunk size and phrase weight on the tuning
-half found nothing that held up on the held-out half, so the defaults stayed.
+halves, and hybrid scores highest, clearly ahead of both on the held-out
+half. That lead comes from weighting each keyword hit in the fusion by the
+share of the query's terms it contains, which was chosen on the tuning half
+and then raised held-out nDCG@10 from 0.715 to 0.759 (and BEIR on all three
+sets); on paraphrases, which share no word with their answer, plain fusion
+had hidden two thirds of what the embeddings found. A sweep of chunk size
+and phrase weight found nothing that held up on the held-out half, so those
+defaults stayed.
 The queries were written by an LLM and there are only 41 per half; the
 [notes benchmark section](https://github.com/searope/notelight/blob/main/docs/results.md#notes-benchmark)
 gives the method, the per-style results and the limits.
@@ -402,7 +409,8 @@ After changing Rust code, rebuild with `maturin develop --release`.
   [milestone 1](https://github.com/searope/notelight/blob/main/docs/learning/m1-rust-walkthrough.md),
   [milestone 2](https://github.com/searope/notelight/blob/main/docs/learning/m2-rust-walkthrough.md),
   [milestone 3](https://github.com/searope/notelight/blob/main/docs/learning/m3-rust-walkthrough.md) (plus
-  [vectorizing the int8 dot product](https://github.com/searope/notelight/blob/main/docs/learning/m3-int8-dot-vectorization.md)),
+  [vectorizing the int8 dot product](https://github.com/searope/notelight/blob/main/docs/learning/m3-int8-dot-vectorization.md)
+  and [weighted fusion](https://github.com/searope/notelight/blob/main/docs/learning/fusion-coverage-weighting.md)),
   [milestone 4](https://github.com/searope/notelight/blob/main/docs/learning/m4-rust-walkthrough.md)
 
 ## License

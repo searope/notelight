@@ -11,6 +11,10 @@ compares with the browser embedder. Re-run it when the index schema changes
 search newer docs.
 
     python scripts/make_sample_index.py
+    python scripts/make_sample_index.py --hits-only
+
+`--hits-only` keeps the committed index and only re-records the fixture's
+hits, after a ranking change that leaves the index format alone.
 
 The index is built in a temporary NOTELIGHT_HOME, so your own indexes are not
 touched; the model comes from the usual model cache (downloaded if missing).
@@ -56,22 +60,23 @@ QUERIES = (
 )
 
 
-def write_fixture() -> None:
-    """Embed QUERIES in Python and record each vector and its hits."""
+def write_fixture(index_root: Path) -> None:
+    """Embed QUERIES in Python and record each vector and its hybrid hits on
+    the index under `index_root`."""
+    from notelight import _core
     from notelight.embed import OnnxEmbedder
-    from notelight.search import Searcher
 
     embedder = OnnxEmbedder()
-    searcher = Searcher(DOCS, embedder)
+    reader = _core.IndexReader.open(index_root)
     queries = []
     for text in QUERIES:
         vector = embedder.embed_query(text).astype("<f4")
-        hits = searcher.search(text, k=K)
+        hits = reader.search(text, vector, k=K)
         queries.append(
             {
                 "text": text,
                 "vector": base64.b64encode(vector.tobytes()).decode("ascii"),
-                "hits": [h.chunk_id for h in hits],
+                "hits": [h.id for h in hits],
             }
         )
     fixture = {
@@ -86,7 +91,21 @@ def write_fixture() -> None:
     assert np.isfinite(np.frombuffer(base64.b64decode(queries[0]["vector"]), "<f4")).all()
 
 
+def rewrite_hits() -> None:
+    """Re-record the fixture's hits on the committed sample index."""
+    with tempfile.TemporaryDirectory() as root:
+        # A one-generation index root around the committed files.
+        generation = Path(root) / "gen-000001"
+        shutil.copytree(OUT, generation)
+        (Path(root) / "CURRENT").write_text(generation.name, encoding="utf-8")
+        write_fixture(Path(root))
+    print(f"wrote {FIXTURE.relative_to(ROOT)} ({FIXTURE.stat().st_size / 1024:.0f} KiB)")
+
+
 def main() -> None:
+    if sys.argv[1:] == ["--hits-only"]:
+        rewrite_hits()
+        return
     from notelight import paths
 
     # NOTELIGHT_HOME would also move the model cache; keep using the usual one.
@@ -100,6 +119,7 @@ def main() -> None:
         # There is exactly one index in the fresh home; CURRENT names its generation.
         (pointer,) = Path(home).glob("indexes/*/*/CURRENT")
         generation = pointer.parent / pointer.read_text(encoding="utf-8").strip()
+        index_root = pointer.parent
         if OUT.exists():
             shutil.rmtree(OUT)
         OUT.mkdir(parents=True)
@@ -111,7 +131,7 @@ def main() -> None:
         manifest["metadata"]["source"] = "docs"
         text = json.dumps(manifest, indent=2) + "\n"
         (OUT / FILES[0]).write_text(text, encoding="utf-8", newline="\n")
-        write_fixture()
+        write_fixture(index_root)
     total = sum((OUT / n).stat().st_size for n in FILES)
     print(f"wrote {OUT.relative_to(ROOT)} ({total / 1024:.0f} KiB)")
     print(f"wrote {FIXTURE.relative_to(ROOT)} ({FIXTURE.stat().st_size / 1024:.0f} KiB)")

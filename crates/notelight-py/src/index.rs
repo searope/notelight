@@ -8,6 +8,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use notelight_core::fuse::DEFAULT_COVERAGE_POWER;
 use notelight_core::index::{
     self, ChunkRecord, DEFAULT_PHRASE_BOOST, OpenOptions, SearchOpts, WriterOptions,
 };
@@ -247,9 +248,11 @@ impl PyIndexReader {
     /// Hybrid search: BM25 over `text`, plus vector search when `vector`
     /// (float32, shape `(dim,)`) is given, fused with reciprocal rank fusion,
     /// then adjusted for quoted phrases and in-order terms (`phrase_boost`).
+    /// With a vector, each BM25 hit counts by the share of query terms it
+    /// contains, raised to `coverage_power` (0 for plain RRF).
     #[pyo3(signature = (
         text, vector = None, k = 10, depth = 50, candidates = 200, rrf_k = 60.0,
-        phrase_boost = DEFAULT_PHRASE_BOOST
+        phrase_boost = DEFAULT_PHRASE_BOOST, coverage_power = DEFAULT_COVERAGE_POWER
     ))]
     #[allow(
         clippy::too_many_arguments,
@@ -265,6 +268,7 @@ impl PyIndexReader {
         candidates: usize,
         rrf_k: f32,
         phrase_boost: f32,
+        coverage_power: f32,
     ) -> PyResult<Vec<PyHit>> {
         let vector = vector.as_ref().map(|v| v.as_slice()).transpose()?;
         let opts = SearchOpts {
@@ -273,6 +277,7 @@ impl PyIndexReader {
             candidates,
             rrf_k,
             phrase_boost,
+            coverage_power,
         };
         let hits = py
             .detach(|| self.inner.search(text, vector, &opts))

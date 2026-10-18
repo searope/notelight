@@ -253,6 +253,7 @@ def test_evaluate_on_notes_reports_mrr_and_styles(notes_folder: Path, tmp_path: 
     table = format_markdown([result])
     assert "notes-all MRR@10" in table and "notes-all by query style:" in table
     assert "keyword (2) nDCG@10" in table and "phrase_boost 4" in table
+    assert "coverage_power 2" in table
 
 
 def test_evaluate_indexes_real_paths_and_line_ranges(notes_folder: Path, tmp_path: Path) -> None:

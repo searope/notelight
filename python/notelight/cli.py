@@ -380,6 +380,14 @@ def eval_(
         float,
         typer.Option(min=0.0, help="Hybrid bonus for query terms in order; 0 turns it off."),
     ] = 1.0,
+    coverage_power: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            help="Hybrid weight of a BM25 hit: (share of query terms it contains) ** this. "
+            "0 is plain RRF.",
+        ),
+    ] = 2.0,
     max_queries: Annotated[
         int | None,
         typer.Option(min=1, help="Evaluate only the first N queries.", show_default=False),
@@ -460,6 +468,7 @@ def eval_(
                     k=k,
                     candidates=candidates,
                     phrase_boost=phrase_boost,
+                    coverage_power=coverage_power,
                     max_queries=max_queries,
                     baseline=baseline,
                     progress=progress,

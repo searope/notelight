@@ -658,7 +658,7 @@ held-out lead of hybrid over BM25 alone is now outside noise (+0.092, interval
 ### A weight for the vector side did not hold
 
 Query set 2 of the notes benchmark (80 new queries, see "A second query
-set" below) was written for this test, and committed together with the
+set" above) was written for this test, and committed together with the
 plan: four candidates that weigh vector hits down when BM25 looks right
 (0.5 when BM25's top hit has every query term; `1 − 0.5·c1²` by the top
 hit's term share `c1`; per vector hit by the terms it contains), one that

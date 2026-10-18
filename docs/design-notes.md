@@ -1349,8 +1349,8 @@ practice the package was created with a placeholder version,
 `0.0.0-stage` ("Temporary package placeholder for staged publishing"), and
 the trusted publisher could then be attached before any real version
 existed, so a workflow publish with provenance was possible for the first
-version too. The placeholder stays in the version list; deprecate it
-(`npm deprecate`) rather than unpublish it.
+version too. The placeholder stays in the version list, deprecated
+(`npm deprecate`) rather than unpublished.
 
 What happened for 0.2.0 (2026-10-17): it was published by hand from the
 tarball the `workflow_dispatch` run built, seconds before the tag's

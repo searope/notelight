@@ -36,6 +36,9 @@ export const BGE_SMALL_EN_V15 = Object.freeze({
   maxTokens: 512,
   queryPrefix: "Represent this sentence for searching relevant passages: ",
   baseUrl: "https://huggingface.co",
+  // `ModelSpec.match_floor`: below this cosine the best chunk is only loosely
+  // related to the query ("no close match"); see the design notes.
+  matchFloor: 0.6,
 });
 
 /** `ModelSpec.model_id`: repository plus short revision. */

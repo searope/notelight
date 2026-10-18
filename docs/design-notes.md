@@ -1431,3 +1431,84 @@ change the API; a patch version does not. What is likely to change before
 What should stay: the `Index`, `IndexWriter`, `chunkText` and `version`
 names, the bytes-in constructor (the package never touches a filesystem or
 the network), and results as plain objects with camelCase fields.
+
+## No close match
+
+Search always returns `k` results. For a query the folder does not cover
+("how to start fire in a rain" over this repository's docs) they are the
+least-bad chunks: BM25 matched "how", "to" and "start", and the vectors
+returned whatever was nearest. Nothing told the user these were not answers.
+Now `Searcher.query`, the CLI, the MCP server, the localhost UI and the
+browser app say "No close match" above such results. It is a notice, not a
+filter: the results are still shown.
+
+### The signal: the best cosine
+
+The signal is the highest cosine between the query and any chunk, from the
+same `ternary+int8` candidate search hybrid search runs (k = 1; 0.03 ms on
+this repository's docs, next to 10 to 30 ms for embedding the query). BM25
+cannot give it: its scores are not comparable across queries, and common
+words match everywhere. Fused RRF scores come from ranks, not similarities.
+
+bge-small's cosines are compressed: unrelated text scores about 0.5, so a
+cosine only means something for the model that made it. The floor therefore
+lives on the model spec (`ModelSpec.match_floor` in `embed.py`, `matchFloor`
+in `web-demo/embed.js`; a test checks they agree). The hashing embedder has
+none, and keyword-only searches have no vector: both report `close_match`
+as unknown (`None`/`null`) and never show the notice. Across several folders
+(MCP, localhost UI) the answer is true if any folder has a close match,
+false only if every folder knows it has none, and unknown otherwise.
+
+### Measured
+
+`scripts/measure_match_floor.py` prints the share of queries whose best
+cosine is below each candidate floor. On-topic: the notes benchmark against
+its corpus (229 chunks) and the BEIR test queries against their own corpora.
+Off-topic: 50 queries written for this before any measurement
+(`scripts/match_floor_offtopic.json`: cooking, travel, other software, in
+tune and held-out halves of 25), the BEIR queries against the notes corpus,
+and FiQA (finance) against SciFact (science) and back.
+
+On-topic queries flagged (false notices):
+
+| floor | notes tune | notes held-out | SciFact | NFCorpus | FiQA |
+|---|---:|---:|---:|---:|---:|
+| 0.58 | 0% | 2% | 0% | 5% | 0% |
+| **0.60** | **2%** | **5%** | **0%** | **7%** | **0%** |
+| 0.62 | 2% | 5% | 0% | 11% | 0% |
+| 0.64 | 15% | 5% | 0% | 14% | 0% |
+
+Off-topic queries flagged (correct notices):
+
+| floor | off-topic tune → notes | off-topic held-out → notes | SciFact → notes | NFCorpus → notes | FiQA → notes | FiQA → SciFact | SciFact → FiQA |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 0.58 | 64% | 64% | 71% | 87% | 65% | 43% | 1% |
+| **0.60** | **76%** | **68%** | **85%** | **94%** | **81%** | **67%** | **8%** |
+| 0.62 | 88% | 76% | 95% | 98% | 91% | 82% | 22% |
+| 0.64 | 100% | 84% | 99% | 99% | 96% | 92% | 48% |
+
+### 0.60, chosen on the tune columns
+
+The floor was chosen from the notes tune split, the off-topic tune half and
+SciFact against the notes. 0.60 is where the first notes tune query (of 41)
+falls below; 0.62 flags more off-topic queries (88% instead of 76%) but sits
+just under the tune split's 5th percentile (0.628), and 0.64 flags 15% of
+real queries. A false notice tells the user their notes do not cover what
+they do, which is worse than a missed one, so the lower floor wins. The
+held-out columns were printed in the same run, so they are a check, not a
+blind one: 2 of 41 held-out queries get a false notice, and 68% of the
+held-out off-topic queries are flagged.
+
+### Limits
+
+- **Corpus size moves the floor.** More chunks mean more chances of one
+  that is near by accident. SciFact queries against FiQA's 57,638 documents
+  are flagged only 8% of the time at 0.60, against 85% on the notes corpus.
+  A folder of notes is closer to the notes corpus (hundreds to a few
+  thousand chunks) than to FiQA, so on a big folder the likely failure is a
+  missed notice, not a false one.
+- **Short, specialist queries score low.** 7% of NFCorpus queries (short
+  medical terms against abstracts) get a false notice.
+- A floor per corpus (from the scores of random off-topic queries at index
+  time, say) would fix the first limit. It is not worth an index-format
+  change until a real folder shows the fixed floor failing.

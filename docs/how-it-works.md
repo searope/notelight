@@ -254,6 +254,13 @@ chunks that lack a query term with one binary search per term; only the
 remaining chunks are read and tokenized
 ([details](design-notes.md#cheap-enough-to-always-run)).
 
+**A close match, or only the nearest chunks.** `Searcher.query` also asks
+the vector index for the single most similar chunk and compares its cosine
+with the model's floor (0.60 for bge-small). Below it, nothing indexed is
+closely related to the query, and every interface says "No close match"
+above the results instead of presenting them as answers
+([how the floor was measured](design-notes.md#no-close-match)).
+
 ## Where results go
 
 All three interfaces read the same index and none of them ever writes it.

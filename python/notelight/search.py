@@ -15,15 +15,17 @@ from typing import Any
 import numpy as np
 
 from notelight import _core, documents, paths
-from notelight.embed import Embedder
+from notelight.embed import Embedder, match_floor_for
 from notelight.errors import EmbedderMismatchError, IndexNotFoundError
 from notelight.indexer import CACHE_FILE, CORE_DIR, SOURCE_FILE
 from notelight.ingest import walk
 
 __all__ = [
     "CURRENT_FILE",
+    "NO_CLOSE_MATCH",
     "IndexInfo",
     "SearchResult",
+    "SearchResults",
     "Searcher",
     "Staleness",
     "check_staleness",
@@ -41,6 +43,12 @@ __all__ = [
 
 #: The file in an index root that names the live generation (see docs/index-format.md).
 CURRENT_FILE = "CURRENT"
+
+#: Shown above results when `SearchResults.close_match` is False.
+NO_CLOSE_MATCH = (
+    "No close match: nothing indexed is closely related to this query. "
+    "These are the nearest chunks."
+)
 
 
 @dataclass(frozen=True)
@@ -78,6 +86,28 @@ class SearchResult:
     def to_dict(self) -> dict[str, Any]:
         """JSON-ready form, including `location` and `pages`."""
         return {**asdict(self), "location": self.location, "pages": self.pages}
+
+
+@dataclass(frozen=True)
+class SearchResults:
+    """The hits of one query, plus how close the best of them is.
+
+    `best_similarity` is the highest cosine between the query and any chunk;
+    `match_floor` is the embedder's measured floor for a close match. Either
+    is None for a keyword-only search or an embedder without a floor.
+    """
+
+    results: list[SearchResult]
+    best_similarity: float | None = None
+    match_floor: float | None = None
+
+    @property
+    def close_match(self) -> bool | None:
+        """False when even the best chunk is only loosely related to the query
+        (results are then the least-bad ones, not answers); None if unknown."""
+        if self.best_similarity is None or self.match_floor is None:
+            return None
+        return self.best_similarity >= self.match_floor
 
 
 def format_pages(first: int | None, last: int | None) -> str | None:
@@ -180,12 +210,23 @@ class Searcher:
 
     def search(self, query: str, k: int = 10) -> list[SearchResult]:
         """Hybrid BM25 + vector search (BM25 only without an embedder)."""
+        return self.query(query, k=k).results
+
+    def query(self, query: str, k: int = 10) -> SearchResults:
+        """`search`, plus whether the best chunk is a close match (see `SearchResults`)."""
         vector = self._embedder.embed_query(query) if self._embedder is not None else None
         if vector is not None and not np.any(vector):
             # The query has no features the embedder knows (for example only
             # punctuation with the hashing embedder): search keywords alone.
             vector = None
         hits = self._reader.search(query, vector, k=k)
+        best: float | None = None
+        floor = match_floor_for(self.manifest.get("embedder")) if vector is not None else None
+        if vector is not None and floor is not None:
+            # The same candidate search hybrid search runs; a fraction of a
+            # millisecond next to embedding the query.
+            top = self._reader.search_vector(vector, k=1)
+            best = top[0][1] if top else None
         records = [(hit, self._reader.chunk(hit.id)) for hit in hits]
         pdfs = {rec.path for _, rec in records if rec.path.lower().endswith(".pdf")}
         starts = page_starts(self.folder, pdfs)
@@ -209,7 +250,7 @@ class Searcher:
                     page_end=pages[1],
                 )
             )
-        return results
+        return SearchResults(results, best_similarity=best, match_floor=floor)
 
 
 @dataclass(frozen=True)

@@ -151,6 +151,13 @@ C++, x64/x86 build tools, Windows SDK).
   (`scripts/make_notes_corpus.py --check`), so later doc edits do not move
   the labels. Decisions and numbers are in `docs/design-notes.md`, "Notes
   benchmark decisions".
+- Query sets: `notes` is set 1 (82 queries), `notes2` is set 2 (80, field
+  `"set": 2`, appended after set 1). Set 1's halves have informed several
+  decisions; set 2's tune half has informed one (vector-side weighting, not
+  shipped) and its held-out half has been run once. A new decision is best
+  made on a new set 3, written the same way. `docs/results.md`, "Fusion:
+  weighting vector hits", lists what was tried; coverage³ on the BM25 side is
+  the open lead for FiQA's hybrid < vectors gap.
 
 ## Milestone 4 notes (for whoever picks up M5)
 

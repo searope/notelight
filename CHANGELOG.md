@@ -73,6 +73,16 @@ format is detected and rebuilt by `notelight index`.
   predefined CMap, image-only, broken) and a Markdown + PDF folder indexed
   and searched, under Node in CI. DOCX is still skipped in the browser.
 
+- **Notes benchmark query set 2** (`notelight eval notes2`): 80 new queries
+  (24 keyword, 16 phrase, 20 question, 20 paraphrase) over the same pinned
+  corpus, written and labelled by reading before any search with them, with
+  their own tune and held-out halves. Set 1's halves had informed three
+  decisions. `notelight eval notes` is still set 1; `load_notes` gains
+  `query_set=`. First use: weighting vector hits down when BM25 looks right
+  was tested on it and not shipped (held-out +0.002, interval 0.000 to
+  +0.004; up to −0.034 on BEIR FiQA for the stronger variants). See
+  `docs/results.md`, "Fusion: weighting vector hits (tested, not shipped)".
+
 ## [0.2.0] - 2026-10-16
 
 The Python package gains the notes benchmark (`notelight eval notes`) and

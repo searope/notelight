@@ -568,6 +568,19 @@ query-style switch would be the thing to test if more paraphrase queries
 show the same. (A weight that needs no tuning was tested later and kept;
 see "Fusion decisions".)
 
+### A second query set
+
+Every decision made on a tune half, and every look at a held-out half,
+makes that half a little less independent. After set 1 had informed three
+decisions (chunk size, phrase weight, coverage-weighted fusion), set 2 added
+80 queries over the same pinned corpus, under the same rules and the same
+labelling, instead of editing set 1. Queries carry a `set` field (missing
+means 1), each set alternates tune and held-out within each style, and sets
+are only ever appended. `notelight eval notes` stays set 1, so every number
+already published reproduces; `notelight eval notes2` runs set 2. The new
+queries avoid needs set 1 covers, and their author knew which hypothesis
+would be tested on them, which is recorded in the file.
+
 ## Fusion decisions
 
 ### Keyword hits count by the query terms they contain
@@ -640,6 +653,34 @@ held-out lead of hybrid over BM25 alone is now outside noise (+0.092, interval
   fused (0.749) than with BM25 alone (0.827), where the vectors dilute good
   keyword hits. A weight for the vector side would be the next thing to try,
   with new queries, since this tune half has now informed one decision more.
+  It was tried; see the next section.
+
+### A weight for the vector side did not hold
+
+Query set 2 of the notes benchmark (80 new queries, see "A second query
+set" below) was written for this test, and committed together with the
+plan: four candidates that weigh vector hits down when BM25 looks right
+(0.5 when BM25's top hit has every query term; `1 − 0.5·c1²` by the top
+hit's term share `c1`; per vector hit by the terms it contains), one that
+sharpens the keyword side instead (coverage³), and the same pick and ship
+rules as before.
+
+On set 2's tune half the gate (0.5 when the top hit has every term) won
+by 0.002, on two queries; on the held-out half, run once, it gained 0.002
+with an interval from 0.000 to 0.004, so the rule kept the default. The
+other vector weights lost on tune and lost clearly on BEIR (up to 0.034 on
+FiQA), where the vectors are the better retriever. The premise did not
+hold either: on new keyword queries hybrid was 0.020 below BM25 on tune and
+0.014 above it on held-out, so the large keyword gap belonged to set 1's
+tune half more than to fusion.
+
+So nothing changed, and two things are left. FiQA's gap cannot be closed
+from the vector side. Coverage³ on the keyword side moves FiQA from 0.376 to
+0.385 (outside noise) and helps SciFact and NFCorpus a little, but it lost
+on both notes tune halves (−0.002 and −0.007), so it was not picked;
+trying it again needs queries that have informed no decision. Set 2's tune
+half has now informed one, and its held-out half has been run once. Numbers:
+`docs/results.md`, "Fusion: weighting vector hits (tested, not shipped)".
 
 
 ## v2 spike: the core in the browser

@@ -286,8 +286,9 @@ hit; BM25 hits keep coverage²):
   vectors are already better);
 - the best V with B3, if both beat the default on tune (B3 did not).
 
-The search was the Python copy of `IndexReader::search` used before, which
-returned the core's top 10 for every notes and BEIR query. First, what set
+The search was a Python copy of `IndexReader::search`
+(`scripts/fusion_lab.py`), which returned the core's top 10 for every notes
+and BEIR query. First, what set
 2 says about the gap itself (core, default settings, nDCG@10):
 
 | Set 2 | vectors | BM25 | hybrid | keyword: vectors / BM25 / hybrid |
@@ -468,6 +469,10 @@ notelight eval notes --max-chars 600 --phrase-boost 4       # one sweep cell
 notelight eval notes --coverage-power 0                     # plain RRF fusion
 notelight eval notes --split heldout                        # the held-out half
 notelight eval notes2                                       # query set 2, tune half
+
+# fusion variants without changing the core (see the script's docstring)
+python scripts/fusion_lab.py notes2 --split tune --parity   # the copy matches the core?
+python scripts/fusion_lab.py notes2 --split tune --cands C0,V1,V2,V3,B3
 ```
 
 Tune on the tune half. Run the held-out half once, for settings chosen

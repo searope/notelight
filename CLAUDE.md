@@ -41,7 +41,8 @@ scripts/                 make_demo_gif.py (README demo GIF from a real MCP sessi
                          make_pdf_fixtures.py (PDFs for web-demo/tests),
                          build_npm.py (-> dist/npm, npm package), smoke_npm.py (installs the tarball, searches),
                          serve_demo.py, make_sample_index.py (+ parity fixture),
-                         make_tokenizer_fixture.py, make_indexing_fixture.py, wasi_run.mjs
+                         make_tokenizer_fixture.py, make_indexing_fixture.py, wasi_run.mjs,
+                         fusion_lab.py (Python copy of hybrid search for trying fusion variants)
 web-demo/                static browser app: wasm build, embed.js + tokenizer.js (bge-small via
                          onnxruntime-web), ingest.js + indexer.js + store.js + index-worker.js
                          (index a folder in the browser, OPFS/IndexedDB), documents.js (PDF text
@@ -158,6 +159,9 @@ C++, x64/x86 build tools, Windows SDK).
   made on a new set 3, written the same way. `docs/results.md`, "Fusion:
   weighting vector hits", lists what was tried; coverage³ on the BM25 side is
   the open lead for FiQA's hybrid < vectors gap.
+  `scripts/fusion_lab.py` reruns every candidate in Python (run `--parity`
+  first; it must match the core's top 10 on every query). Add a new
+  candidate there before touching the core.
 
 ## Milestone 4 notes (for whoever picks up M5)
 

@@ -97,10 +97,40 @@ jobs:
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/venv/bin/python" -m pip install --only-binary=:all: "notelight${VERSION:+==$VERSION}"
           "$RUNNER_TEMP/venv/bin/python" -c "from notelight.embed import BGE_SMALL_EN_V15 as m; print('revision=' + m.revision)" >> "$GITHUB_OUTPUT"
+          "$RUNNER_TEMP/venv/bin/python" -c "from notelight.eval.datasets import BEIR_DATASETS as d; s = d['scifact']; print(f'scifact-url={s.url}'); print(f'scifact-sha256={s.sha256}')" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/notelight-models
           key: bge-small-${{ steps.install.outputs.revision }}
+      # The SciFact zip comes from the BEIR server at TU Darmstadt, which can
+      # time out (it did on 2026-11-23, twice). Keep the verified zip in the
+      # Actions cache, keyed by the SHA-256 the installed notelight pins, so
+      # the weekly run needs that server only when the cache is empty. The
+      # zip is saved right after it is verified, so a later failing step
+      # does not lose it.
+      - name: Restore the SciFact dataset
+        id: scifact-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/notelight-home/eval/datasets/scifact.zip
+          key: beir-scifact-${{ steps.install.outputs.scifact-sha256 }}
+      - name: Download the SciFact dataset (cache miss)
+        if: steps.scifact-cache.outputs.cache-hit != 'true'
+        env:
+          URL: ${{ steps.install.outputs.scifact-url }}
+          SHA256: ${{ steps.install.outputs.scifact-sha256 }}
+        run: |
+          dir="$NOTELIGHT_HOME/eval/datasets"
+          mkdir -p "$dir"
+          curl --fail --location --retry 4 --retry-all-errors --retry-delay 30 \
+            --connect-timeout 60 --max-time 300 --output "$dir/scifact.zip" "$URL"
+          echo "$SHA256  $dir/scifact.zip" | sha256sum --check -
+      - name: Save the SciFact dataset
+        if: steps.scifact-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/notelight-home/eval/datasets/scifact.zip
+          key: beir-scifact-${{ steps.install.outputs.scifact-sha256 }}
       # Corpus embeddings are not cached: embedding all 5,183 documents with
       # the installed wheel is the point. nDCG@10 must match docs/results.md.
       - name: notelight eval scifact
